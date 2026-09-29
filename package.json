@@ -1,0 +1,33 @@
+{
+  "name": "boconic",
+  "version": "1.0.0",
+  "description": "Boconic - Nen tang ket noi sach giao khoa chia se hoc duong va tong hop hoc lieu chinh thuc",
+  "main": "server/index.js",
+  "type": "module",
+  "scripts": {
+    "start": "node server/index.js",
+    "dev": "concurrently \"npm run server\" \"npm run client\"",
+    "server": "node server/index.js",
+    "client": "npm --prefix client run dev",
+    "build": "npm --prefix client run build",
+    "test": "node --test server/tests/*.test.js"
+  },
+  "dependencies": {
+    "cors": "^2.8.5",
+    "express": "^4.21.2",
+    "morgan": "^1.10.0",
+    "multer": "^1.4.5-lts.1"
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.2"
+  },
+  "keywords": [
+    "boconic",
+    "textbook-sharing",
+    "education",
+    "fair-scheduling",
+    "vietnam-curriculum"
+  ],
+  "author": "Boconic AI Club Team",
+  "license": "MIT"
+}
