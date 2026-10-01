@@ -19,66 +19,69 @@
     </div>
 
     <nav class="sidebar-nav">
-      <div class="nav-section">Vận hành</div>
+      <div class="nav-section">Vận hành & Phân phối</div>
       <a href="/admin/dashboard" class="nav-link {% if active_nav == 'dashboard' %}active{% endif %}">
-        <span>📊</span> Bảng điều khiển
+        Bảng điều khiển
       </a>
       <a href="/admin/users" class="nav-link {% if active_nav == 'users' %}active{% endif %}">
-        <span>👥</span> Quản lý người dùng
+        Quản lý người dùng
       </a>
       <a href="/admin/requests" class="nav-link {% if active_nav == 'requests' %}active{% endif %}">
-        <span>📢</span> Nhu cầu & Đề nghị
+        Nhu cầu & Đề nghị
       </a>
       <a href="/admin/inventory" class="nav-link {% if active_nav == 'inventory' %}active{% endif %}">
-        <span>📦</span> Kho & Thư viện
+        Kho & Thư viện
       </a>
       <a href="/admin/books" class="nav-link {% if active_nav == 'books' %}active{% endif %}">
-        <span>📚</span> Đầu sách (Catalog)
+        Đầu sách (Catalog)
       </a>
       <a href="/admin/copies" class="nav-link {% if active_nav == 'copies' %}active{% endif %}">
-        <span>📖</span> Bản sách vật lý
+        Bản sách vật lý
       </a>
       <a href="/admin/partial-materials" class="nav-link {% if active_nav == 'partial_materials' %}active{% endif %}">
-        <span>📑</span> Tài liệu 1 phần & Photo
+        Tài liệu 1 phần & Bản in
       </a>
       <a href="/admin/collections" class="nav-link {% if active_nav == 'collections' %}active{% endif %}">
-        <span>🗂️</span> Authorized Collections
+        Bộ sưu tập ủy quyền
       </a>
       <a href="/admin/chapter-proposals" class="nav-link {% if active_nav == 'chapter_proposals' %}active{% endif %}">
-        <span>📑</span> Đề xuất chương
+        Đề xuất chương
       </a>
       <a href="/admin/loans" class="nav-link {% if active_nav == 'loans' %}active{% endif %}">
-        <span>🤝</span> Lượt mượn & Tranh chấp
+        Lượt mượn & Tranh chấp
       </a>
       <a href="/admin/moderation" class="nav-link {% if active_nav == 'moderation' %}active{% endif %}">
-        <span>⚠️</span> Báo cáo & Cảnh báo
+        Báo cáo & Cảnh báo
       </a>
       <a href="/admin/analytics" class="nav-link {% if active_nav == 'analytics' %}active{% endif %}">
-        <span>📈</span> Thống kê & Jobs
+        Thống kê & Jobs
       </a>
 
       <div class="nav-section">Dữ liệu & Mở rộng</div>
       <a href="/admin/custom-fields" class="nav-link {% if active_nav == 'custom_fields' %}active{% endif %}">
-        <span>🏷️</span> Dynamic Custom Fields
+        Thuộc tính mở rộng
       </a>
       <a href="/admin/import" class="nav-link {% if active_nav == 'import' %}active{% endif %}">
-        <span>📥</span> Nhập liệu CSV Wizard
+        Nhập liệu CSV Wizard
       </a>
 
       <div class="nav-section">Hệ thống & An toàn</div>
       <a href="/admin/process-audit" class="nav-link {% if active_nav == 'process_audit' %}active{% endif %}">
-        <span>🔍</span> Process Diagnostics
+        Chẩn đoán quy trình
       </a>
       <a href="/admin/audit" class="nav-link {% if active_nav == 'audit' %}active{% endif %}">
-        <span>📋</span> Nhật ký Audit
+        Nhật ký Audit
       </a>
       <a href="/admin/backups" class="nav-link {% if active_nav == 'backups' %}active{% endif %}">
-        <span>💾</span> Sao lưu & Khôi phục
+        Sao lưu & Khôi phục
+      </a>
+      <a href="/admin/roles" class="nav-link {% if active_nav == 'roles' %}active{% endif %}">
+        Phân quyền & RBAC
       </a>
     </nav>
 
     <div class="sidebar-footer">
-      <span>Môi trường: Dev</span>
+      <span>Môi trường: Production</span>
       <form action="/admin/logout" method="POST" style="margin: 0;">
         <button type="submit" class="btn-logout">Thoát</button>
       </form>

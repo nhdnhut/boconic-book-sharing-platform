@@ -316,7 +316,7 @@ async def search_community_library(
     stmt = (
         select(BookCopy, Book)
         .join(Book, BookCopy.book_id == Book.id)
-        .where(BookCopy.visibility == "published")
+        .where(BookCopy.visibility.in_(["published", "public"]))
     )
     if available_only:
         stmt = stmt.where(BookCopy.circulation_status == "available")

@@ -8,6 +8,7 @@ Tests:
 5. Safe deletion guards (loan conflict protection and file cleanup).
 6. HTTP endpoints for user account self-service.
 """
+import base64
 import os
 import uuid
 import pytest
@@ -16,6 +17,7 @@ import httpx
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.config import settings
 from app.core.errors import BoconicException
 from app.db.models.catalog import Book, BookCopy, Chapter, ChapterResource, CopyCoverageRange
 from app.db.models.identity import User
@@ -538,4 +540,204 @@ async def test_digital_partial_oversize_rejection(db_session: AsyncSession):
         )
     assert exc.value.status_code == 400
     assert "vượt quá dung lượng" in exc.value.message
+
+
+@pytest.mark.asyncio
+async def test_search_available_partial_materials_and_borrow_flow(db_session: AsyncSession):
+    """
+    Test finding published available partial photocopies in the community
+    and executing the full borrow request handshake.
+    """
+    from app.services.lending import LendingService
+    from app.bot.client import internal_bot_client
+
+    suffix = uuid.uuid4().hex[:6]
+    owner = User(
+        display_name=f"Owner Photocopy {suffix}",
+        public_alias=f"owner_photo_{suffix}",
+        telegram_user_id=880000 + int(suffix[:4], 16),
+        status="active",
+    )
+    borrower = User(
+        display_name=f"Borrower Partial {suffix}",
+        public_alias=f"borrower_part_{suffix}",
+        telegram_user_id=770000 + int(suffix[:4], 16),
+        status="active",
+    )
+    book = Book(
+        title=f"Đại số tuyến tính nâng cao - {suffix}",
+        subject="Toán học",
+        custom_data={"total_pages": 400},
+    )
+    db_session.add_all([owner, borrower, book])
+    await db_session.commit()
+
+    # Declare a published physical partial photocopy available for lending
+    copy, coverage_range = await PartialMaterialService.create_physical_partial_material(
+        db=db_session,
+        user_id=owner.id,
+        book_id=book.id,
+        start_page=1,
+        end_page=60,
+        chapters=[1, 2],
+        condition="good",
+        source_description="Bản photocopy ôn thi cuối kỳ",
+        visibility="public",
+        notes="Cho mượn trong 14 ngày",
+    )
+    await db_session.commit()
+
+    # 1. Search available partial materials service method
+    search_res = await PartialMaterialService.search_available_partial_materials(
+        db=db_session,
+        query=suffix,
+        limit=5,
+    )
+    assert search_res["total_physical"] >= 1
+    found_copy = search_res["physical_copies"][0]
+    assert found_copy["copy_id"] == copy.id
+    assert found_copy["book_title"] == book.title
+    assert found_copy["owner_alias"] == owner.public_alias
+    assert found_copy["ranges"][0]["start_page"] == 1
+    assert found_copy["ranges"][0]["end_page"] == 60
+
+    # 2. Test via internal bot HTTP endpoint
+    async def override_get_db_flow():
+        yield db_session
+
+    app.dependency_overrides[get_db] = override_get_db_flow
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as ac:
+        headers = {
+            "X-Bot-Api-Key": settings.BOT_API_KEY,
+            "X-Telegram-User-Id": str(borrower.telegram_user_id),
+        }
+        res = await ac.get(f"/api/v1/internal/telegram/partial-materials/available?q={suffix}", headers=headers)
+        assert res.status_code == 200
+        data = res.json()
+        assert len(data["physical_copies"]) >= 1
+        assert data["physical_copies"][0]["copy_id"] == copy.id
+
+        # 3. Create borrow request for this partial copy
+        borrow_res = await LendingService.create_borrow_request(
+            db=db_session,
+            copy_id=copy.id,
+            borrower_id=borrower.id,
+            duration_days=14,
+            note="Cần mượn ôn thi chương 1 và 2",
+        )
+        await db_session.commit()
+        assert borrow_res.id is not None
+        assert borrow_res.status == "pending"
+
+        # 4. Owner accepts borrow request
+        loan = await LendingService.accept_borrow_request(
+            db=db_session,
+            request_id=borrow_res.id,
+            owner_id=owner.id,
+        )
+        await db_session.commit()
+        assert loan.id is not None
+        assert loan.copy_id == copy.id
+        assert loan.status == "reserved"
+
+    app.dependency_overrides.clear()
+
+
+@pytest.mark.asyncio
+async def test_arbitrary_user_upload_quick_book_and_public_visibility(db_session: AsyncSession):
+    """
+    Test that any user can register an arbitrary document, declare photocopy as public,
+    upload public digital materials, and that community library lists all available resources.
+    """
+    suffix = uuid.uuid4().hex[:6]
+    tg_id = 660000 + int(suffix[:4], 16)
+    user = User(
+        display_name=f"Arbitrary User {suffix}",
+        public_alias=f"user_{suffix}",
+        telegram_user_id=tg_id,
+        status="active",
+    )
+    db_session.add(user)
+    await db_session.commit()
+
+    async def override_get_db_flow():
+        yield db_session
+
+    app.dependency_overrides[get_db] = override_get_db_flow
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as ac:
+        headers = {
+            "X-Bot-Api-Key": settings.BOT_API_KEY,
+            "X-Telegram-User-Id": str(tg_id),
+        }
+
+        # 1. Quick create an arbitrary book/document
+        custom_title = f"Tài liệu Ôn thi Xác suất Chuyên sâu {suffix}"
+        res_book = await ac.post(
+            "/api/v1/internal/telegram/books/quick-create",
+            json={"title": custom_title, "subject": "Toán cao cấp"},
+            headers=headers,
+        )
+        assert res_book.status_code == 200
+        book_info = res_book.json()
+        assert book_info["status"] == "success"
+        b_id = book_info["book_id"]
+        assert book_info["title"] == custom_title
+
+        # 2. Declare physical photocopy as 'public'
+        res_phys = await ac.post(
+            "/api/v1/internal/telegram/partial-materials/physical",
+            json={
+                "book_id": b_id,
+                "start_page": 1,
+                "end_page": 40,
+                "condition": "good",
+                "visibility": "public",
+                "source_description": "Photo bìa cứng",
+            },
+            headers=headers,
+        )
+        assert res_phys.status_code == 200
+        phys_data = res_phys.json()
+        assert phys_data["status"] == "success"
+        assert phys_data["visibility"] == "published" # normalized to published
+
+        # 3. Upload public digital partial material
+        sample_bytes = b"Chuong 1: Khong gian xac suat va bien co ngau nhien"
+        b64_str = base64.b64encode(sample_bytes).decode("utf-8")
+        res_dig = await ac.post(
+            "/api/v1/internal/telegram/partial-materials/digital",
+            json={
+                "book_id": b_id,
+                "title": "Tóm tắt chương 1 PDF",
+                "file_bytes_base64": b64_str,
+                "filename": "xstk_c1.pdf",
+                "page_start": 1,
+                "page_end": 15,
+                "is_public": True,
+            },
+            headers=headers,
+        )
+        assert res_dig.status_code == 200
+        dig_data = res_dig.json()
+        assert dig_data["status"] == "success"
+        assert dig_data["is_public"] is True
+        assert dig_data["verification_status"] == "verified"
+
+        # 4. Community library returns both physical copy and digital resource
+        res_lib = await ac.get("/api/v1/internal/telegram/community/library", headers=headers)
+        assert res_lib.status_code == 200
+        lib_data = res_lib.json()
+        assert lib_data["total_copies"] >= 1
+        found_c = next((c for c in lib_data["available_copies"] if c["copy_id"] == phys_data["copy_id"]), None)
+        assert found_c is not None
+        assert found_c["book_title"] == custom_title
+        assert found_c["is_partial"] is True
+
+        found_d = next((d for d in lib_data["digital_resources"] if d["resource_id"] == dig_data["resource_id"]), None)
+        assert found_d is not None
+        assert found_d["title"] == "Tóm tắt chương 1 PDF"
+
+    app.dependency_overrides.clear()
+
+
 

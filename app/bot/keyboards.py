@@ -12,15 +12,16 @@ def get_main_menu_keyboard(is_admin: bool = False) -> ReplyKeyboardMarkup:
         [KeyboardButton(text="🔎 Tìm sách"), KeyboardButton(text="📚 Thư viện của tôi")],
         [KeyboardButton(text="🎒 Tài nguyên đang dùng"), KeyboardButton(text="📖 Quản lý theo chương")],
         [KeyboardButton(text="📢 Yêu cầu sách"), KeyboardButton(text="📋 Nhu cầu của tôi")],
-        [KeyboardButton(text="➕ Đăng sách"), KeyboardButton(text="📑 Up tài liệu 1 phần")],
+        [KeyboardButton(text="📖 Mượn tài liệu 1 phần"), KeyboardButton(text="📑 Up tài liệu 1 phần")],
+        [KeyboardButton(text="➕ Đăng sách"), KeyboardButton(text="🌐 Thư viện cộng đồng")],
         [KeyboardButton(text="🤝 Đang mượn"), KeyboardButton(text="📤 Đang cho mượn")],
-        [KeyboardButton(text="📋 Yêu cầu mượn"), KeyboardButton(text="🌐 Thư viện cộng đồng")],
-        [KeyboardButton(text="🔗 Tài nguyên mở"), KeyboardButton(text="👤 Hồ sơ & Cài đặt")],
-        [KeyboardButton(text="🚩 Báo cáo / Hỗ trợ")],
+        [KeyboardButton(text="📋 Yêu cầu mượn"), KeyboardButton(text="🔗 Tài nguyên mở")],
+        [KeyboardButton(text="👤 Hồ sơ & Cài đặt"), KeyboardButton(text="🚩 Báo cáo / Hỗ trợ")],
     ]
     if is_admin:
         keyboard.append([KeyboardButton(text="👑 Quản trị hệ thống")])
     return ReplyKeyboardMarkup(keyboard=keyboard, resize_keyboard=True)
+
 
 def get_cancel_keyboard() -> ReplyKeyboardMarkup:
     """Quick cancel keyboard for FSM states."""
@@ -44,7 +45,9 @@ def get_book_inline_keyboard(book_id: str, available_copies: list) -> InlineKeyb
             "good": "Tốt",
             "fair": "Khá",
         }.get(cond, cond)
-        btn_text = f"Mượn bản {code} ({cond_vi})"
+        is_p = c.get("is_partial", False)
+        p_tag = " (1 phần)" if is_p else ""
+        btn_text = f"Mượn bản {code}{p_tag} ({cond_vi})"
         buttons.append([InlineKeyboardButton(text=btn_text, callback_data=f"brq:{cid}")])
 
     return InlineKeyboardMarkup(inline_keyboard=buttons)
@@ -334,6 +337,108 @@ def get_my_partial_management_keyboard(physical_items: list, digital_items: list
         InlineKeyboardButton(text="🔄 Làm mới danh sách", callback_data="ptp:refresh_list"),
     ])
     return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+
+def get_borrow_partial_menu_keyboard() -> InlineKeyboardMarkup:
+    """Menu keyboard for borrowing partial materials."""
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text="🔍 Xem bản photo 1 phần có sẵn", callback_data="bprt:available"),
+        ],
+        [
+            InlineKeyboardButton(text="📢 Đăng nhu cầu mượn 1 phần (Chương/Trang)", callback_data="bprt:create_need"),
+        ],
+        [
+            InlineKeyboardButton(text="🔎 Tìm theo tên môn / sách", callback_data="bprt:search"),
+            InlineKeyboardButton(text="💾 Trích đoạn số theo chương", callback_data="bprt:digital"),
+        ],
+        [
+            InlineKeyboardButton(text="❌ Đóng", callback_data="bprt:cancel"),
+        ],
+    ])
+
+
+def get_partial_borrow_scope_keyboard() -> InlineKeyboardMarkup:
+    """Scope choices when requesting to borrow a partial material."""
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text="📑 Cần theo Chương (Chapters)", callback_data="bprt_scope:chapters"),
+        ],
+        [
+            InlineKeyboardButton(text="📄 Cần theo Khoảng trang (Page range)", callback_data="bprt_scope:page_range"),
+        ],
+        [
+            InlineKeyboardButton(text="❌ Hủy", callback_data="bprt:cancel"),
+        ],
+    ])
+
+
+def get_partial_copy_borrow_keyboard(copy_id: str) -> InlineKeyboardMarkup:
+    """Button to borrow a specific partial copy."""
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text="🤝 Gửi yêu cầu mượn bản này", callback_data=f"brq:{copy_id}"),
+        ]
+    ])
+
+
+def get_digital_visibility_keyboard() -> InlineKeyboardMarkup:
+    """Choose visibility for digital partial material / excerpt."""
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text="🌐 Công khai cộng đồng (Mọi người có thể đọc)", callback_data="pdvis:public"),
+        ],
+        [
+            InlineKeyboardButton(text="🔒 Riêng tư (Chỉ lưu trữ cá nhân)", callback_data="pdvis:private"),
+        ],
+        [
+            InlineKeyboardButton(text="❌ Hủy bỏ", callback_data="ptp:cancel"),
+        ],
+    ])
+
+
+def get_community_library_keyboard(available_copies: list = None) -> InlineKeyboardMarkup:
+    """Build interactive action buttons for community library browser."""
+    buttons = []
+    if available_copies:
+        for c in available_copies[:6]:
+            cid = c.get("copy_id")
+            title = c.get("book_title", "Sách")
+            code = c.get("public_code", "")
+            part_tag = " (1 phần)" if c.get("is_partial") else ""
+            btn_text = f"🤝 Mượn: {title[:18]}...{part_tag}" if len(title) > 18 else f"🤝 Mượn: {title}{part_tag}"
+            buttons.append([InlineKeyboardButton(text=btn_text, callback_data=f"brq:{cid}")])
+
+    buttons.append([
+        InlineKeyboardButton(text="📖 Photocopy 1 phần", callback_data="bprt:available"),
+        InlineKeyboardButton(text="💾 Trích đoạn số & File", callback_data="bprt:digital"),
+    ])
+    buttons.append([
+        InlineKeyboardButton(text="🔎 Tìm theo tên môn", callback_data="bprt:search"),
+        InlineKeyboardButton(text="➕ Đăng tài liệu của bạn", callback_data="ptp:start_new"),
+    ])
+    buttons.append([
+        InlineKeyboardButton(text="🔄 Làm mới", callback_data="comm:refresh"),
+    ])
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+
+def get_borrow_partial_urgency_keyboard() -> InlineKeyboardMarkup:
+    """Inline buttons to choose urgency for partial material borrow request."""
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text="Bình thường", callback_data="bprt_urg:normal"),
+            InlineKeyboardButton(text="Cần gấp ⚡", callback_data="bprt_urg:urgent"),
+            InlineKeyboardButton(text="Rất gấp 🔥", callback_data="bprt_urg:critical"),
+        ],
+        [
+            InlineKeyboardButton(text="❌ Hủy", callback_data="bprt:cancel"),
+        ]
+    ])
+
+
+
+
 
 
 

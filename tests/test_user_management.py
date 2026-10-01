@@ -288,13 +288,121 @@ async def test_api_me_resources_json_serializable(db_session: AsyncSession):
     db_session.add(user)
     await db_session.commit()
 
+    # Add book, copy, loan, chapter resource, and community request
+    book = Book(title=f"Đại Số Tuyến Tính {suffix}")
+    other_user = User(display_name=f"Partner {suffix}", public_alias=f"partner_{suffix}")
+    db_session.add_all([book, other_user])
+    await db_session.flush()
+
+    copy = BookCopy(
+        book_id=book.id,
+        owner_id=user.id,
+        current_holder_id=user.id,
+        public_code=f"CPY-OWN-{suffix}",
+        barcode=f"BC-OWN-{suffix}",
+        condition="good",
+        circulation_status="available",
+    )
+    copy_borrowed = BookCopy(
+        book_id=book.id,
+        owner_id=other_user.id,
+        current_holder_id=user.id,
+        public_code=f"CPY-BOR-{suffix}",
+        condition="like_new",
+        circulation_status="on_loan",
+    )
+    db_session.add_all([copy, copy_borrowed])
+    await db_session.flush()
+
+    loan = Loan(
+        copy_id=copy_borrowed.id,
+        lender_id=other_user.id,
+        borrower_id=user.id,
+        status="active",
+        due_at=utc_now() + timedelta(days=5),
+    )
+    chapter = Chapter(book_id=book.id, chapter_number=1, title="Không gian vector")
+    db_session.add_all([loan, chapter])
+    await db_session.flush()
+
+    c_res = ChapterResource(
+        chapter_id=chapter.id,
+        book_id=book.id,
+        owner_id=user.id,
+        title="Ghi chú bài giảng",
+        resource_type="notes",
+        verification_status="verified",
+    )
+    req = CommunityRequest(
+        user_id=user.id,
+        book_id=book.id,
+        title_query=f"Đại Số Tuyến Tính {suffix}",
+        status="open",
+    )
+    db_session.add_all([c_res, req])
+    await db_session.commit()
+
     # Get API summary
     api_summary = await UserService.get_user_resources_summary_api(db_session, user_id=user.id)
     assert api_summary["user_id"] == user.id
     assert api_summary["display_name"] == f"API User {suffix}"
-    assert "borrowed_loans" in api_summary
-    assert "lent_loans" in api_summary
-    assert "owned_copies" in api_summary
-    assert "chapter_resources" in api_summary
-    assert "study_progress" in api_summary
-    assert "trust_profile" in api_summary
+    assert len(api_summary["owned_copies"]) == 1
+    assert api_summary["owned_copies"][0]["condition"] == "good"
+    assert api_summary["owned_copies"][0]["condition_status"] == "good"
+    assert len(api_summary["borrowed_loans"]) == 1
+    assert len(api_summary["chapter_resources"]) == 1
+    assert len(api_summary["open_needs"]) == 1
+
+
+@pytest.mark.asyncio
+async def test_api_internal_telegram_users_me_resources_endpoint(db_session: AsyncSession):
+    """Test full HTTP GET /api/v1/internal/telegram/users/me/resources delegated endpoint."""
+    import httpx
+    from app.core.config import settings
+    from app.main import app
+    from app.db.session import get_db
+
+    suffix = uuid.uuid4().hex[:6]
+    tg_id = 7770001 + int(suffix[:4], 16)
+    user = User(
+        display_name=f"Bot TG User {suffix}",
+        public_alias=f"bottg_{suffix}",
+        telegram_user_id=tg_id,
+        status="active",
+    )
+    book = Book(title=f"Sinh học 12 {suffix}")
+    db_session.add_all([user, book])
+    await db_session.flush()
+
+    copy = BookCopy(
+        book_id=book.id,
+        owner_id=user.id,
+        current_holder_id=user.id,
+        public_code=f"CPY-TG-{suffix}",
+        barcode=f"BC-TG-{suffix}",
+        condition="fair",
+        circulation_status="available",
+    )
+    db_session.add(copy)
+    await db_session.commit()
+
+    async def override_get_db():
+        yield db_session
+
+    app.dependency_overrides[get_db] = override_get_db
+    transport = httpx.ASGITransport(app=app)
+    try:
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            headers = {
+                "X-Bot-Api-Key": settings.BOT_API_KEY,
+                "X-Telegram-User-Id": str(tg_id),
+            }
+            res = await client.get("/api/v1/internal/telegram/users/me/resources", headers=headers)
+            assert res.status_code == 200
+            data = res.json()
+            assert data["display_name"] == f"Bot TG User {suffix}"
+            assert len(data["owned_copies"]) == 1
+            assert data["owned_copies"][0]["condition"] == "fair"
+            assert data["owned_copies"][0]["condition_status"] == "fair"
+    finally:
+        app.dependency_overrides.clear()

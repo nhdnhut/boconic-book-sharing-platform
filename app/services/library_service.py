@@ -46,7 +46,7 @@ class LibraryService:
         if tab == "available":
             owned_copies_stmt = owned_copies_stmt.where(
                 BookCopy.circulation_status == "available",
-                BookCopy.visibility == "published",
+                BookCopy.visibility.in_(["published", "public"]),
             )
         elif tab == "lent":
             owned_copies_stmt = owned_copies_stmt.where(
@@ -218,6 +218,8 @@ class LibraryService:
         if copy.owner_id != user_id:
             raise BoconicException(code=ErrorCode.FORBIDDEN, message="Bạn không sở hữu bản sách này.", status_code=403)
 
+        if visibility == "public":
+            visibility = "published"
         if visibility not in ("published", "private"):
             raise BoconicException(code=ErrorCode.BAD_REQUEST, message="Trạng thái hiển thị không hợp lệ.", status_code=400)
 

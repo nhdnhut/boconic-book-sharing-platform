@@ -498,6 +498,7 @@ class BoconicInternalClient:
         rights_basis: str = "personal_fair_use",
         consent_given: bool = True,
         provenance: Optional[str] = None,
+        is_public: bool = False,
     ) -> Dict[str, Any]:
         api_url = f"{self.base_url}/api/v1/internal/telegram/partial-materials/digital"
         payload = {
@@ -513,6 +514,7 @@ class BoconicInternalClient:
             "rights_basis": rights_basis,
             "consent_given": consent_given,
             "provenance": provenance,
+            "is_public": is_public,
         }
         async with httpx.AsyncClient(timeout=30.0) as client:
             res = await client.post(api_url, json=payload, headers=self._headers(telegram_user_id))
@@ -540,8 +542,42 @@ class BoconicInternalClient:
             res.raise_for_status()
             return res.json()
 
+    async def search_available_partial_materials(
+        self, telegram_user_id: int, query: Optional[str] = None, limit: int = 10
+    ) -> Dict[str, Any]:
+        url = f"{self.base_url}/api/v1/internal/telegram/partial-materials/available"
+        params = {"limit": limit}
+        if query:
+            params["q"] = query
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            res = await client.get(url, params=params, headers=self._headers(telegram_user_id))
+            res.raise_for_status()
+            return res.json()
+
+    async def quick_create_book(
+        self, telegram_user_id: int, title: str, subject: Optional[str] = "Tài liệu học tập"
+    ) -> Dict[str, Any]:
+        url = f"{self.base_url}/api/v1/internal/telegram/books/quick-create"
+        payload = {"title": title, "subject": subject}
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            res = await client.post(url, json=payload, headers=self._headers(telegram_user_id))
+            res.raise_for_status()
+            return res.json()
+
+    async def get_community_library(
+        self, telegram_user_id: int, limit: int = 20, offset: int = 0
+    ) -> Dict[str, Any]:
+        url = f"{self.base_url}/api/v1/internal/telegram/community/library"
+        params = {"limit": limit, "offset": offset}
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            res = await client.get(url, params=params, headers=self._headers(telegram_user_id))
+            res.raise_for_status()
+            return res.json()
+
 
 internal_bot_client = BoconicInternalClient()
+
+
 
 
 

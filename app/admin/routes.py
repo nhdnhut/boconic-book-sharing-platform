@@ -5,13 +5,14 @@ from typing import Optional
 from fastapi import APIRouter, Cookie, Depends, Form, Query, Request, Response, UploadFile, File
 from fastapi.responses import HTMLResponse, RedirectResponse, Response as PlainResponse
 from fastapi.templating import Jinja2Templates
-from sqlalchemy import desc, func, select
+from sqlalchemy import desc, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.core.config import settings
-from app.core.security import generate_session_token, generate_csrf_token, verify_password
+from app.core.security import generate_session_token, generate_csrf_token, verify_password, hash_password
 from app.db.models.catalog import Author, Book, BookAuthor, BookCopy, CopyCoverageRange, Chapter, ChapterProposal, ChapterResource
+from app.db.models.rbac import Role, Permission, RolePermission, AdminRoleAssignment
 from app.db.models.community import (
     AuthorizedCollection,
     CommunityRequest,
@@ -119,6 +120,8 @@ async def dashboard_page(
     reserved_loans = (await db.execute(select(func.count(Loan.id)).where(Loan.status == "reserved"))).scalar_one()
     overdue_loans = (await db.execute(select(func.count(Loan.id)).where(Loan.status == "active", Loan.due_at < now))).scalar_one()
     reports_count = (await db.execute(select(func.count(Report.id)).where(Report.status.in_(["open", "reviewing"])))).scalar_one()
+    pending_proposals = (await db.execute(select(func.count(ChapterProposal.id)).where(ChapterProposal.status == "pending"))).scalar_one()
+    pending_outbox = (await db.execute(select(func.count(OutboxEvent.id)).where(OutboxEvent.status == "pending"))).scalar_one()
 
     # Recent loans
     recent_loans_res = await db.execute(
@@ -142,6 +145,8 @@ async def dashboard_page(
         "reserved_loans_count": reserved_loans,
         "overdue_loans_count": overdue_loans,
         "unresolved_reports_count": reports_count,
+        "pending_proposals": pending_proposals,
+        "pending_outbox": pending_outbox,
     }
 
     return templates.TemplateResponse(
@@ -230,11 +235,15 @@ async def admin_create_book_form(
         actor_id=admin.id,
     )
     await db.commit()
-    return RedirectResponse(url="/admin/books", status_code=303)
+    return RedirectResponse(url=f"/admin/books/{book.id}?message=Đã+tạo+đầu+sách+thành+công", status_code=303)
 
-@router.get("/copies", response_class=HTMLResponse)
-async def copies_page(
+
+@router.get("/books/{book_id}", response_class=HTMLResponse)
+async def admin_book_detail(
     request: Request,
+    book_id: str,
+    message: Optional[str] = Query(None),
+    error: Optional[str] = Query(None),
     boconic_session: Optional[str] = Cookie(None),
     db: AsyncSession = Depends(get_db),
 ):
@@ -242,26 +251,476 @@ async def copies_page(
     if not admin:
         return RedirectResponse(url="/admin/login", status_code=303)
 
-    res = await db.execute(
+    from app.db.models.community import CommunityRequest as CR
+    book_res = await db.execute(
+        select(Book)
+        .options(
+            selectinload(Book.authors).selectinload(BookAuthor.author),
+            selectinload(Book.copies).selectinload(BookCopy.owner),
+            selectinload(Book.copies).selectinload(BookCopy.current_holder),
+            selectinload(Book.chapters),
+        )
+        .where(Book.id == book_id)
+    )
+    book = book_res.scalar_one_or_none()
+    if not book:
+        return RedirectResponse(url="/admin/books?error=Không+tìm+thấy+đầu+sách", status_code=303)
+
+    chapters = sorted(book.chapters, key=lambda c: c.order_index or 0)
+    copies = list(book.copies)
+
+    needs_res = await db.execute(
+        select(CR).where(CR.book_id == book_id).order_by(desc(CR.created_at)).limit(20)
+    )
+    needs = list(needs_res.scalars().all())
+
+    return templates.TemplateResponse(
+        request,
+        "book_detail.html",
+        {
+            "admin": admin,
+            "book": book,
+            "copies": copies,
+            "chapters": chapters,
+            "needs": needs,
+            "message": message,
+            "error": error,
+            "active_nav": "books",
+        },
+    )
+
+
+@router.get("/books/{book_id}/edit", response_class=HTMLResponse)
+async def admin_book_edit_page(
+    request: Request,
+    book_id: str,
+    boconic_session: Optional[str] = Cookie(None),
+    db: AsyncSession = Depends(get_db),
+):
+    admin = await get_optional_admin(boconic_session, db)
+    if not admin:
+        return RedirectResponse(url="/admin/login", status_code=303)
+
+    book_res = await db.execute(
+        select(Book)
+        .options(selectinload(Book.authors).selectinload(BookAuthor.author))
+        .where(Book.id == book_id)
+    )
+    book = book_res.scalar_one_or_none()
+    if not book:
+        return RedirectResponse(url="/admin/books", status_code=303)
+
+    authors_str = ", ".join(ba.author.name for ba in book.authors)
+
+    return templates.TemplateResponse(
+        request,
+        "book_edit.html",
+        {
+            "admin": admin,
+            "book": book,
+            "authors_str": authors_str,
+            "active_nav": "books",
+        },
+    )
+
+
+@router.post("/books/{book_id}/edit", response_class=HTMLResponse)
+async def admin_book_edit_submit(
+    request: Request,
+    book_id: str,
+    title: str = Form(...),
+    authors: str = Form(...),
+    isbn: Optional[str] = Form(None),
+    curriculum: Optional[str] = Form(None),
+    subject: Optional[str] = Form(None),
+    grade_level: Optional[int] = Form(None),
+    publisher: Optional[str] = Form(None),
+    publication_year: Optional[int] = Form(None),
+    edition_label: Optional[str] = Form(None),
+    language: str = Form("vi"),
+    description: Optional[str] = Form(None),
+    action: Optional[str] = Form(None),
+    boconic_session: Optional[str] = Cookie(None),
+    db: AsyncSession = Depends(get_db),
+):
+    admin = await get_optional_admin(boconic_session, db)
+    if not admin:
+        return RedirectResponse(url="/admin/login", status_code=303)
+
+    book = await db.get(Book, book_id)
+    if not book:
+        return RedirectResponse(url="/admin/books", status_code=303)
+
+    from app.services.catalog import normalize_isbn
+
+    # Update fields
+    book.title = title.strip()
+    book.publisher = publisher.strip() if publisher else None
+    book.publication_year = publication_year
+    book.edition_label = edition_label.strip() if edition_label else None
+    book.language = language
+    book.subject = subject.strip() if subject else None
+    book.grade_level = grade_level
+    book.curriculum = curriculum.strip() if curriculum else None
+    book.description = description.strip() if description else None
+
+    if isbn:
+        isbn10, isbn13 = normalize_isbn(isbn)
+        if isbn13:
+            # Check uniqueness (allow same book)
+            existing_res = await db.execute(select(Book).where(Book.isbn13 == isbn13, Book.id != book_id))
+            if existing_res.scalar_one_or_none():
+                return templates.TemplateResponse(
+                    request,
+                    "book_edit.html",
+                    {
+                        "admin": admin,
+                        "book": book,
+                        "authors_str": authors,
+                        "error": f"ISBN {isbn13} đã tồn tại trên đầu sách khác.",
+                        "active_nav": "books",
+                    },
+                )
+            book.isbn10 = isbn10
+            book.isbn13 = isbn13
+        else:
+            book.isbn10 = None
+            book.isbn13 = None
+    else:
+        book.isbn10 = None
+        book.isbn13 = None
+
+    # Update authors: clear and re-add
+    await db.execute(select(BookAuthor).where(BookAuthor.book_id == book_id))
+    existing_links_res = await db.execute(select(BookAuthor).where(BookAuthor.book_id == book_id))
+    for link in existing_links_res.scalars().all():
+        await db.delete(link)
+    await db.flush()
+
+    author_list = [a.strip() for a in authors.split(",") if a.strip()]
+    for author_name in author_list:
+        author_obj = await CatalogService.get_or_create_author(db, author_name)
+        new_link = BookAuthor(book_id=book.id, author_id=author_obj.id)
+        db.add(new_link)
+
+    await AuditService.log_action(db, action="update_book", entity_type="book", entity_id=book.id, actor_id=admin.id)
+    await db.commit()
+
+    if action == "save_add_copy":
+        return RedirectResponse(url=f"/admin/books/{book_id}/copies/add", status_code=303)
+
+    return RedirectResponse(url=f"/admin/books/{book_id}?message=Đã+cập+nhật+thông+tin+đầu+sách", status_code=303)
+
+
+@router.get("/books/{book_id}/copies/add", response_class=HTMLResponse)
+async def admin_add_copy_page(
+    request: Request,
+    book_id: str,
+    error: Optional[str] = Query(None),
+    boconic_session: Optional[str] = Cookie(None),
+    db: AsyncSession = Depends(get_db),
+):
+    admin = await get_optional_admin(boconic_session, db)
+    if not admin:
+        return RedirectResponse(url="/admin/login", status_code=303)
+
+    from app.db.models.identity import User
+    book_res = await db.execute(
+        select(Book)
+        .options(
+            selectinload(Book.authors).selectinload(BookAuthor.author),
+            selectinload(Book.copies),
+        )
+        .where(Book.id == book_id)
+    )
+    book = book_res.scalar_one_or_none()
+    if not book:
+        return RedirectResponse(url="/admin/books", status_code=303)
+
+    users_res = await db.execute(select(User).where(User.status == "active").order_by(User.display_name))
+    users = users_res.scalars().all()
+
+    return templates.TemplateResponse(
+        request,
+        "add_copy.html",
+        {
+            "admin": admin,
+            "book": book,
+            "users": users,
+            "error": error,
+            "active_nav": "books",
+        },
+    )
+
+
+@router.post("/books/{book_id}/copies/add", response_class=HTMLResponse)
+async def admin_add_copy_submit(
+    book_id: str,
+    owner_id: str = Form(...),
+    quantity: int = Form(1),
+    condition: str = Form("good"),
+    format_type: str = Form("physical"),
+    maximum_loan_days: int = Form(14),
+    lending_policy: str = Form("free_return"),
+    visibility: str = Form("published"),
+    is_partial: str = Form("false"),
+    barcode: Optional[str] = Form(None),
+    storage_location: Optional[str] = Form(None),
+    notes: Optional[str] = Form(None),
+    action: Optional[str] = Form(None),
+    boconic_session: Optional[str] = Cookie(None),
+    db: AsyncSession = Depends(get_db),
+):
+    admin = await get_optional_admin(boconic_session, db)
+    if not admin:
+        return RedirectResponse(url="/admin/login", status_code=303)
+
+    quantity = max(1, min(quantity, 20))  # Clamp 1-20
+    created_codes = []
+    errors = []
+
+    for i in range(quantity):
+        try:
+            copy = await CatalogService.add_book_copy(
+                db=db,
+                book_id=book_id,
+                owner_id=owner_id,
+                condition=condition,
+                maximum_loan_days=maximum_loan_days,
+                lending_policy=lending_policy,
+                storage_location_private=storage_location,
+                notes=notes,
+                barcode=barcode if quantity == 1 else None,
+                visibility=visibility,
+                format_type=format_type,
+                is_partial=(is_partial == "true"),
+            )
+            created_codes.append(copy.public_code)
+        except Exception as e:
+            errors.append(f"Bản {i+1}: {str(e)}")
+
+    if created_codes:
+        await AuditService.log_action(
+            db, action="add_copies", entity_type="book_copy",
+            entity_id=book_id, actor_id=admin.id,
+            details={"count": len(created_codes), "codes": created_codes},
+        )
+        await db.commit()
+
+    if errors and not created_codes:
+        return RedirectResponse(
+            url=f"/admin/books/{book_id}/copies/add?error={'|'.join(errors)}",
+            status_code=303,
+        )
+
+    msg = f"Đã+tạo+{len(created_codes)}+bản+sách:+{',+'.join(created_codes)}"
+    if errors:
+        msg += f"+|+Lỗi:+{len(errors)}+bản"
+
+    if action == "save_add_another":
+        return RedirectResponse(url=f"/admin/books/{book_id}/copies/add?message={msg}", status_code=303)
+
+    return RedirectResponse(url=f"/admin/books/{book_id}?message={msg}", status_code=303)
+
+
+@router.get("/books/{book_id}/chapters/add", response_class=HTMLResponse)
+async def admin_add_chapter_page(
+    request: Request,
+    book_id: str,
+    error: Optional[str] = Query(None),
+    boconic_session: Optional[str] = Cookie(None),
+    db: AsyncSession = Depends(get_db),
+):
+    admin = await get_optional_admin(boconic_session, db)
+    if not admin:
+        return RedirectResponse(url="/admin/login", status_code=303)
+
+    book_res = await db.execute(
+        select(Book).options(selectinload(Book.chapters)).where(Book.id == book_id)
+    )
+    book = book_res.scalar_one_or_none()
+    if not book:
+        return RedirectResponse(url="/admin/books", status_code=303)
+
+    existing_chapters = sorted(book.chapters, key=lambda c: c.order_index or 0)
+    next_order = max((ch.order_index or 0 for ch in existing_chapters), default=-1) + 1
+
+    return templates.TemplateResponse(
+        request,
+        "add_chapter.html",
+        {
+            "admin": admin,
+            "book": book,
+            "existing_chapters": existing_chapters,
+            "next_order": next_order,
+            "error": error,
+            "active_nav": "books",
+        },
+    )
+
+
+@router.post("/books/{book_id}/chapters/add", response_class=HTMLResponse)
+async def admin_add_chapter_submit(
+    book_id: str,
+    title: str = Form(...),
+    chapter_code: Optional[str] = Form(None),
+    chapter_number: Optional[int] = Form(None),
+    order_index: int = Form(0),
+    page_start: Optional[int] = Form(None),
+    page_end: Optional[int] = Form(None),
+    pagination_basis: str = Form("edition_page_numbers"),
+    source: str = Form("manual"),
+    parent_id: Optional[str] = Form(None),
+    action: Optional[str] = Form(None),
+    boconic_session: Optional[str] = Cookie(None),
+    db: AsyncSession = Depends(get_db),
+):
+    admin = await get_optional_admin(boconic_session, db)
+    if not admin:
+        return RedirectResponse(url="/admin/login", status_code=303)
+
+    book = await db.get(Book, book_id)
+    if not book:
+        return RedirectResponse(url="/admin/books", status_code=303)
+
+    chapter = Chapter(
+        book_id=book_id,
+        title=title.strip(),
+        chapter_code=chapter_code.strip() if chapter_code else None,
+        chapter_number=chapter_number,
+        order_index=order_index,
+        page_start=page_start,
+        page_end=page_end,
+        pagination_basis=pagination_basis,
+        source=source,
+        parent_id=parent_id if parent_id else None,
+        verification_status="unverified",
+    )
+    db.add(chapter)
+    await AuditService.log_action(
+        db, action="add_chapter", entity_type="chapter",
+        entity_id=book_id, actor_id=admin.id,
+        details={"title": title},
+    )
+    await db.commit()
+
+    if action == "save_add_another":
+        return RedirectResponse(url=f"/admin/books/{book_id}/chapters/add", status_code=303)
+
+    return RedirectResponse(url=f"/admin/books/{book_id}?message=Đã+thêm+chương+'{title}'", status_code=303)
+
+
+@router.get("/copies", response_class=HTMLResponse)
+async def copies_page(
+    request: Request,
+    search: Optional[str] = Query(None),
+    condition: Optional[str] = Query(None),
+    status: Optional[str] = Query(None),
+    visibility: Optional[str] = Query(None),
+    boconic_session: Optional[str] = Cookie(None),
+    db: AsyncSession = Depends(get_db),
+):
+    admin = await get_optional_admin(boconic_session, db)
+    if not admin:
+        return RedirectResponse(url="/admin/login", status_code=303)
+
+    owner_user = select(User.id, User.public_alias).subquery("owner_user")
+    holder_user = select(User.id, User.public_alias).subquery("holder_user")
+
+    stmt = (
+        select(
+            BookCopy,
+            Book,
+            owner_user.c.public_alias.label("owner_alias"),
+            holder_user.c.public_alias.label("holder_alias"),
+        )
+        .join(Book, BookCopy.book_id == Book.id)
+        .outerjoin(owner_user, BookCopy.owner_id == owner_user.c.id)
+        .outerjoin(holder_user, BookCopy.current_holder_id == holder_user.c.id)
+    )
+    if search:
+        q = f"%{search.strip()}%"
+        stmt = stmt.where(or_(BookCopy.public_code.ilike(q), Book.title.ilike(q)))
+    if condition:
+        stmt = stmt.where(BookCopy.condition == condition)
+    if status:
+        stmt = stmt.where(BookCopy.circulation_status == status)
+    if visibility:
+        stmt = stmt.where(BookCopy.visibility == visibility)
+
+    stmt = stmt.order_by(desc(BookCopy.created_at))
+    res = await db.execute(stmt)
+    copies = res.all()
+
+    return templates.TemplateResponse(
+        request,
+        "copies.html",
+        {
+            "admin": admin,
+            "copies": copies,
+            "search_query": search,
+            "current_condition": condition,
+            "current_status": status,
+            "current_vis": visibility,
+            "active_nav": "copies",
+        },
+    )
+
+
+@router.get("/copies/{copy_id}", response_class=HTMLResponse)
+async def admin_copy_detail(
+    request: Request,
+    copy_id: str,
+    message: Optional[str] = Query(None),
+    error: Optional[str] = Query(None),
+    boconic_session: Optional[str] = Cookie(None),
+    db: AsyncSession = Depends(get_db),
+):
+    admin = await get_optional_admin(boconic_session, db)
+    if not admin:
+        return RedirectResponse(url="/admin/login", status_code=303)
+
+    copy_res = await db.execute(
         select(BookCopy)
         .options(
             selectinload(BookCopy.book),
             selectinload(BookCopy.owner),
             selectinload(BookCopy.current_holder),
+            selectinload(BookCopy.loans).selectinload(Loan.borrower),
         )
-        .order_by(desc(BookCopy.created_at))
+        .where(BookCopy.id == copy_id)
     )
-    copies = res.scalars().all()
+    copy = copy_res.scalar_one_or_none()
+    if not copy:
+        return RedirectResponse(url="/admin/copies", status_code=303)
+
+    owner_alias = copy.owner.public_alias if copy.owner else "N/A"
+    holder_alias = copy.current_holder.public_alias if copy.current_holder else "N/A"
+    loans = sorted(copy.loans, key=lambda l: l.created_at or datetime.datetime.min, reverse=True)
 
     return templates.TemplateResponse(
         request,
-        "copies.html",
-        {"admin": admin, "copies": copies, "active_nav": "copies"},
+        "copy_detail.html",
+        {
+            "admin": admin,
+            "copy": copy,
+            "book": copy.book,
+            "owner_alias": owner_alias,
+            "holder_alias": holder_alias,
+            "loans": loans,
+            "message": message,
+            "error": error,
+            "active_nav": "copies",
+        },
     )
 
-@router.get("/loans", response_class=HTMLResponse)
-async def loans_page(
-    request: Request,
+
+@router.post("/copies/{copy_id}/update", response_class=HTMLResponse)
+async def admin_update_copy(
+    copy_id: str,
+    condition: str = Form(...),
+    visibility: str = Form(...),
+    notes: Optional[str] = Form(None),
     boconic_session: Optional[str] = Cookie(None),
     db: AsyncSession = Depends(get_db),
 ):
@@ -269,22 +728,209 @@ async def loans_page(
     if not admin:
         return RedirectResponse(url="/admin/login", status_code=303)
 
-    res = await db.execute(
-        select(Loan)
-        .options(
-            selectinload(Loan.copy).selectinload(BookCopy.book),
-            selectinload(Loan.borrower),
-            selectinload(Loan.lender),
-        )
-        .order_by(desc(Loan.created_at))
+    copy = await db.get(BookCopy, copy_id)
+    if not copy:
+        return RedirectResponse(url="/admin/copies", status_code=303)
+
+    # Guard: cannot change to available if there's an active loan
+    old_condition = copy.condition
+    old_visibility = copy.visibility
+
+    copy.condition = condition
+    copy.visibility = visibility
+    if notes:
+        copy.notes = (copy.notes or "") + f"\n[Admin] {notes}"
+
+    await AuditService.log_action(
+        db, action="update_copy", entity_type="book_copy",
+        entity_id=copy.id, actor_id=admin.id,
+        details={"old_condition": old_condition, "new_condition": condition, "old_visibility": old_visibility, "new_visibility": visibility},
     )
+    await db.commit()
+    return RedirectResponse(url=f"/admin/copies/{copy_id}?message=Đã+cập+nhật+thành+công", status_code=303)
+
+
+@router.get("/loans", response_class=HTMLResponse)
+async def loans_page(
+    request: Request,
+    status: Optional[str] = Query(None),
+    overdue: Optional[str] = Query(None),
+    q: Optional[str] = Query(None),
+    boconic_session: Optional[str] = Cookie(None),
+    db: AsyncSession = Depends(get_db),
+):
+    admin = await get_optional_admin(boconic_session, db)
+    if not admin:
+        return RedirectResponse(url="/admin/login", status_code=303)
+
+    stmt = select(Loan).options(
+        selectinload(Loan.copy).selectinload(BookCopy.book),
+        selectinload(Loan.borrower),
+        selectinload(Loan.lender),
+    )
+    if status:
+        stmt = stmt.where(Loan.status == status)
+
+    now = datetime.datetime.now(datetime.timezone.utc)
+    if overdue == "yes":
+        stmt = stmt.where(Loan.status == "active", Loan.due_at < now)
+    elif overdue == "no":
+        stmt = stmt.where(or_(Loan.status != "active", Loan.due_at >= now, Loan.due_at.is_(None)))
+
+    if q and q.strip():
+        kw = f"%{q.strip()}%"
+        stmt = (
+            stmt.join(BookCopy, Loan.copy_id == BookCopy.id)
+            .join(Book, BookCopy.book_id == Book.id)
+            .join(User, Loan.borrower_id == User.id)
+            .where(
+                (Book.title.ilike(kw))
+                | (BookCopy.public_code.ilike(kw))
+                | (User.public_alias.ilike(kw))
+                | (User.display_name.ilike(kw))
+            )
+        )
+
+    stmt = stmt.order_by(desc(Loan.created_at))
+    res = await db.execute(stmt)
     loans = res.scalars().all()
 
     return templates.TemplateResponse(
         request,
         "loans.html",
-        {"admin": admin, "loans": loans, "active_nav": "loans"},
+        {
+            "admin": admin,
+            "loans": loans,
+            "now": now,
+            "current_status": status,
+            "overdue_filter": overdue,
+            "search_q": q or "",
+            "active_nav": "loans",
+        },
     )
+
+
+@router.get("/loans/{loan_id}", response_class=HTMLResponse)
+async def admin_loan_detail(
+    request: Request,
+    loan_id: str,
+    message: Optional[str] = Query(None),
+    error: Optional[str] = Query(None),
+    boconic_session: Optional[str] = Cookie(None),
+    db: AsyncSession = Depends(get_db),
+):
+    admin = await get_optional_admin(boconic_session, db)
+    if not admin:
+        return RedirectResponse(url="/admin/login", status_code=303)
+
+    from app.db.models.lending import HandoverConfirmation, LoanEvent
+    loan_res = await db.execute(
+        select(Loan).options(
+            selectinload(Loan.copy).selectinload(BookCopy.book),
+            selectinload(Loan.borrower),
+            selectinload(Loan.lender),
+            selectinload(Loan.confirmations).selectinload(HandoverConfirmation.actor),
+            selectinload(Loan.events),
+        ).where(Loan.id == loan_id)
+    )
+    loan = loan_res.scalar_one_or_none()
+    if not loan:
+        return RedirectResponse(url="/admin/loans", status_code=303)
+
+    now = datetime.datetime.now(datetime.timezone.utc)
+    is_overdue = loan.status == "active" and loan.due_at and loan.due_at < now
+    confirmations = sorted(loan.confirmations, key=lambda c: c.confirmed_at or datetime.datetime.min)
+    events = sorted(loan.events, key=lambda e: e.created_at or datetime.datetime.min, reverse=True)
+
+    return templates.TemplateResponse(
+        request,
+        "loan_detail.html",
+        {
+            "admin": admin,
+            "loan": loan,
+            "confirmations": confirmations,
+            "events": events,
+            "is_overdue": is_overdue,
+            "message": message,
+            "error": error,
+            "active_nav": "loans",
+        },
+    )
+
+
+@router.post("/loans/{loan_id}/force-return", response_class=HTMLResponse)
+async def admin_force_return_loan_direct(
+    loan_id: str,
+    resolution_notes: str = Form(...),
+    boconic_session: Optional[str] = Cookie(None),
+    db: AsyncSession = Depends(get_db),
+):
+    admin = await get_optional_admin(boconic_session, db)
+    if not admin:
+        return RedirectResponse(url="/admin/login", status_code=303)
+
+    try:
+        await UserService.admin_force_return_loan(
+            db=db, loan_id=loan_id, admin_id=admin.username, resolution_notes=resolution_notes,
+        )
+        await db.commit()
+        return RedirectResponse(url=f"/admin/loans/{loan_id}?message=Đã+cưỡng+chế+trả+sách+thành+công", status_code=303)
+    except Exception as e:
+        await db.rollback()
+        return RedirectResponse(url=f"/admin/loans/{loan_id}?error={str(e)}", status_code=303)
+
+
+@router.post("/loans/{loan_id}/resolve", response_class=HTMLResponse)
+async def admin_resolve_dispute(
+    loan_id: str,
+    resolution: str = Form(...),
+    reason: str = Form(...),
+    redirect_to: Optional[str] = Form(None),
+    boconic_session: Optional[str] = Cookie(None),
+    db: AsyncSession = Depends(get_db),
+):
+    admin = await get_optional_admin(boconic_session, db)
+    if not admin:
+        return RedirectResponse(url="/admin/login", status_code=303)
+
+    from app.db.models.lending import LoanEvent
+    loan = await db.get(Loan, loan_id)
+    dest = redirect_to or f"/admin/loans/{loan_id}"
+    sep = "&" if "?" in dest else "?"
+    if not loan or loan.status != "disputed":
+        return RedirectResponse(url=f"{dest}{sep}error=Giao+dịch+không+ở+trạng+thái+tranh+chấp", status_code=303)
+
+    old_status = loan.status
+    loan.status = resolution
+    if resolution == "returned":
+        loan.returned_at = datetime.datetime.now(datetime.timezone.utc)
+        copy = await db.get(BookCopy, loan.copy_id)
+        if copy:
+            copy.circulation_status = "available"
+            copy.current_holder_id = copy.owner_id
+    elif resolution == "closed_lost":
+        copy = await db.get(BookCopy, loan.copy_id)
+        if copy:
+            copy.circulation_status = "lost"
+    elif resolution == "active":
+        copy = await db.get(BookCopy, loan.copy_id)
+        if copy:
+            copy.circulation_status = "loaned"
+
+    event = LoanEvent(
+        loan_id=loan.id, actor_id=admin.id,
+        action="admin_resolve_dispute", from_status=old_status,
+        to_status=resolution, reason=reason,
+    )
+    db.add(event)
+    await AuditService.log_action(
+        db, action="resolve_dispute", entity_type="loan",
+        entity_id=loan.id, actor_id=admin.id,
+        details={"resolution": resolution, "reason": reason},
+    )
+    await db.commit()
+    return RedirectResponse(url=f"{dest}{sep}message=Đã+xử+lý+tranh+chấp+thành+công", status_code=303)
+
 
 @router.get("/custom-fields", response_class=HTMLResponse)
 async def custom_fields_page(
@@ -799,6 +1445,8 @@ async def admin_assemble_collection(
 @router.get("/moderation", response_class=HTMLResponse)
 async def admin_moderation_page(
     request: Request,
+    message: Optional[str] = Query(None),
+    error: Optional[str] = Query(None),
     boconic_session: Optional[str] = Cookie(None),
     db: AsyncSession = Depends(get_db),
 ):
@@ -806,19 +1454,76 @@ async def admin_moderation_page(
     if not admin:
         return RedirectResponse(url="/admin/login", status_code=303)
 
-    stmt = select(UserWarning, User.public_alias).join(User, UserWarning.subject_user_id == User.id).order_by(desc(UserWarning.created_at))
-    res = await db.execute(stmt)
-    warnings = res.all()
+    # 1. Disputed loans
+    disputed_stmt = (
+        select(Loan)
+        .options(
+            selectinload(Loan.copy).selectinload(BookCopy.book),
+            selectinload(Loan.borrower),
+            selectinload(Loan.lender),
+        )
+        .where(Loan.status == "disputed")
+        .order_by(desc(Loan.updated_at))
+    )
+    disputed_loans = (await db.execute(disputed_stmt)).scalars().all()
+
+    # 2. Reports
+    reports_stmt = (
+        select(Report)
+        .options(selectinload(Report.reporter))
+        .order_by(desc(Report.created_at))
+    )
+    reports = (await db.execute(reports_stmt)).scalars().all()
+
+    # 3. Warnings
+    stmt = (
+        select(UserWarning, User.public_alias)
+        .join(User, UserWarning.subject_user_id == User.id)
+        .order_by(desc(UserWarning.created_at))
+    )
+    warnings = (await db.execute(stmt)).all()
 
     return templates.TemplateResponse(
         request,
         "moderation.html",
         {
             "admin": admin,
+            "disputed_loans": disputed_loans,
+            "reports": reports,
             "warnings": warnings,
+            "message": message,
+            "error": error,
             "active_nav": "moderation",
         },
     )
+
+
+@router.post("/reports/{report_id}/resolve", response_class=HTMLResponse)
+async def admin_resolve_report(
+    report_id: str,
+    status: str = Form(...),
+    resolution_note: str = Form(""),
+    boconic_session: Optional[str] = Cookie(None),
+    db: AsyncSession = Depends(get_db),
+):
+    admin = await get_optional_admin(boconic_session, db)
+    if not admin:
+        return RedirectResponse(url="/admin/login", status_code=303)
+
+    report = await db.get(Report, report_id)
+    if report:
+        report.status = status
+        report.resolution_note = resolution_note
+        report.resolved_by = admin.id
+        report.resolved_at = datetime.datetime.now(datetime.timezone.utc)
+        await AuditService.log_action(
+            db, action="resolve_report", entity_type="report",
+            entity_id=report.id, actor_id=admin.id,
+            details={"status": status, "note": resolution_note},
+        )
+        await db.commit()
+    return RedirectResponse(url="/admin/moderation?message=Đã+cập+nhật+báo+cáo+thành+công", status_code=303)
+
 
 
 @router.post("/warnings/issue", response_class=HTMLResponse)
@@ -1032,7 +1737,7 @@ async def process_audit_dashboard(
     overdue_loans_count = (await db.execute(select(func.count(Loan.id)).where(Loan.status == "active", Loan.due_at < now))).scalar_one() or 0
 
     # Outbox events
-    pending_outbox_count = (await db.execute(select(func.count(OutboxEvent.id)).where(OutboxEvent.processed_at.is_(None)))).scalar_one() or 0
+    pending_outbox_count = (await db.execute(select(func.count(OutboxEvent.id)).where(OutboxEvent.status == "pending"))).scalar_one() or 0
     recent_outbox_res = await db.execute(
         select(OutboxEvent).order_by(desc(OutboxEvent.created_at)).limit(25)
     )
@@ -1300,6 +2005,202 @@ async def admin_force_return_loan_form(
             url=f"/admin/users/{user_id}?error={str(e)}",
             status_code=303,
         )
+
+
+@router.get("/roles", response_class=HTMLResponse)
+async def admin_roles_page(
+    request: Request,
+    message: Optional[str] = Query(None),
+    error: Optional[str] = Query(None),
+    boconic_session: Optional[str] = Cookie(None),
+    db: AsyncSession = Depends(get_db),
+):
+    admin = await get_optional_admin(boconic_session, db)
+    if not admin:
+        return RedirectResponse(url="/admin/login", status_code=303)
+
+    # Check and seed default permissions & roles if empty
+    perms_count = (await db.execute(select(func.count(Permission.id)))).scalar_one()
+    if perms_count == 0:
+        default_perms = [
+            ("catalog.read", "Xem danh mục sách và chi tiết"),
+            ("catalog.write", "Thêm, sửa sách và cấu trúc chương"),
+            ("copies.manage", "Quản lý bản sách vật lý và trạng thái"),
+            ("loans.manage", "Xem và điều phối giao dịch mượn"),
+            ("loans.override", "Cưỡng chế hoàn tất hoặc giải quyết tranh chấp mượn"),
+            ("chapters.review", "Phê duyệt hoặc từ chối đề xuất chương"),
+            ("users.view", "Tra cứu hồ sơ và tài nguyên người dùng"),
+            ("users.moderate", "Khóa tài khoản, ban hành cảnh báo người dùng"),
+            ("audit.view", "Xem nhật ký audit và chuẩn đoán luồng vận hành"),
+            ("backup.manage", "Tạo và khôi phục bản sao lưu dữ liệu"),
+        ]
+        perm_objs = {}
+        for code, desc_text in default_perms:
+            p = Permission(code=code, description=desc_text)
+            db.add(p)
+            perm_objs[code] = p
+        await db.flush()
+
+        roles_count = (await db.execute(select(func.count(Role.id)))).scalar_one()
+        if roles_count == 0:
+            r_super = Role(name="superadmin", description="Toàn quyền quản trị hệ thống", is_system=True)
+            r_librarian = Role(name="librarian", description="Thủ thư: Quản lý sách, bản sao và cấu trúc chương", is_system=True)
+            r_moderator = Role(name="moderator", description="Kiểm duyệt viên: Xử lý vi phạm, báo cáo và cảnh báo", is_system=True)
+            r_operator = Role(name="operator", description="Vận hành viên: Giám sát mượn trả và luồng tiến trình", is_system=True)
+            db.add_all([r_super, r_librarian, r_moderator, r_operator])
+            await db.flush()
+
+            # Attach permissions to roles
+            librarian_perm_codes = ["catalog.read", "catalog.write", "copies.manage", "chapters.review"]
+            for c in librarian_perm_codes:
+                db.add(RolePermission(role_id=r_librarian.id, permission_id=perm_objs[c].id))
+
+            mod_perm_codes = ["users.view", "users.moderate", "loans.override"]
+            for c in mod_perm_codes:
+                db.add(RolePermission(role_id=r_moderator.id, permission_id=perm_objs[c].id))
+
+            op_perm_codes = ["loans.manage", "audit.view", "backup.manage"]
+            for c in op_perm_codes:
+                db.add(RolePermission(role_id=r_operator.id, permission_id=perm_objs[c].id))
+
+            # Auto-assign superadmin role to current admin if not assigned
+            db.add(AdminRoleAssignment(admin_id=admin.id, role_id=r_super.id))
+            await db.commit()
+
+    # Query admins with their roles
+    admins_res = await db.execute(
+        select(AdminAccount)
+        .options(selectinload(AdminAccount.role_assignments).selectinload(AdminRoleAssignment.role))
+        .order_by(AdminAccount.created_at.asc())
+    )
+    admins = admins_res.scalars().all()
+
+    # Query roles with their permissions
+    roles_res = await db.execute(
+        select(Role)
+        .options(selectinload(Role.permissions).selectinload(RolePermission.permission))
+        .order_by(Role.is_system.desc(), Role.name.asc())
+    )
+    roles = roles_res.scalars().all()
+
+    # Query all permissions
+    perms_res = await db.execute(select(Permission).order_by(Permission.code.asc()))
+    permissions = perms_res.scalars().all()
+
+    # Fetch CSRF token from current session
+    sess_res = await db.execute(select(AdminSession).where(AdminSession.session_token == boconic_session))
+    current_sess = sess_res.scalar_one_or_none()
+    csrf_token = current_sess.csrf_token if current_sess else ""
+
+    return templates.TemplateResponse(
+        request,
+        "roles.html",
+        {
+            "current_admin": admin,
+            "admins": admins,
+            "roles": roles,
+            "permissions": permissions,
+            "active_nav": "roles",
+            "csrf_token": csrf_token,
+            "message": message,
+            "error": error,
+        },
+    )
+
+
+@router.post("/roles/create", response_class=HTMLResponse)
+async def admin_create_role(
+    request: Request,
+    boconic_session: Optional[str] = Cookie(None),
+    db: AsyncSession = Depends(get_db),
+):
+    admin = await get_optional_admin(boconic_session, db)
+    if not admin:
+        return RedirectResponse(url="/admin/login", status_code=303)
+
+    form_data = await request.form()
+    name = (form_data.get("name") or "").strip().lower()
+    description = (form_data.get("description") or "").strip()
+    selected_perms = form_data.getlist("permissions")
+
+    if not name:
+        return RedirectResponse(url="/admin/roles?error=Tên+vai+trò+không+được+để+trống", status_code=303)
+
+    # Check duplicate
+    existing = (await db.execute(select(Role).where(Role.name == name))).scalar_one_or_none()
+    if existing:
+        return RedirectResponse(url="/admin/roles?error=Vai+trò+này+đã+tồn+tại", status_code=303)
+
+    new_role = Role(name=name, description=description, is_system=False)
+    db.add(new_role)
+    await db.flush()
+
+    for p_id in selected_perms:
+        db.add(RolePermission(role_id=new_role.id, permission_id=p_id))
+
+    await db.commit()
+    return RedirectResponse(url=f"/admin/roles?message=Đã+tạo+thành+công+vai+trò+{name}", status_code=303)
+
+
+@router.post("/roles/accounts/create", response_class=HTMLResponse)
+async def admin_create_account(
+    request: Request,
+    username: str = Form(...),
+    password: str = Form(...),
+    email: Optional[str] = Form(None),
+    role_id: Optional[str] = Form(None),
+    boconic_session: Optional[str] = Cookie(None),
+    db: AsyncSession = Depends(get_db),
+):
+    admin = await get_optional_admin(boconic_session, db)
+    if not admin:
+        return RedirectResponse(url="/admin/login", status_code=303)
+
+    clean_user = username.strip()
+    if len(password) < 8:
+        return RedirectResponse(url="/admin/roles?error=Mật+khẩu+phải+có+ít+nhất+8+ký+tự", status_code=303)
+
+    existing = (await db.execute(select(AdminAccount).where(AdminAccount.username == clean_user))).scalar_one_or_none()
+    if existing:
+        return RedirectResponse(url="/admin/roles?error=Tên+đăng+nhập+đã+tồn+tại", status_code=303)
+
+    new_admin = AdminAccount(
+        username=clean_user,
+        email=email.strip() if email else None,
+        password_hash=hash_password(password),
+        is_active=True,
+    )
+    db.add(new_admin)
+    await db.flush()
+
+    if role_id:
+        db.add(AdminRoleAssignment(admin_id=new_admin.id, role_id=role_id))
+
+    await db.commit()
+    return RedirectResponse(url=f"/admin/roles?message=Đã+tạo+tài+khoản+quản+trị+{clean_user}", status_code=303)
+
+
+@router.post("/roles/accounts/{target_admin_id}/toggle-status", response_class=HTMLResponse)
+async def admin_toggle_account_status(
+    target_admin_id: str,
+    boconic_session: Optional[str] = Cookie(None),
+    db: AsyncSession = Depends(get_db),
+):
+    admin = await get_optional_admin(boconic_session, db)
+    if not admin:
+        return RedirectResponse(url="/admin/login", status_code=303)
+
+    if admin.id == target_admin_id:
+        return RedirectResponse(url="/admin/roles?error=Không+thể+tự+khóa+tài+khoản+của+chính+mình", status_code=303)
+
+    target = await db.get(AdminAccount, target_admin_id)
+    if not target:
+        return RedirectResponse(url="/admin/roles?error=Không+tìm+thấy+tài+khoản", status_code=303)
+
+    target.is_active = not target.is_active
+    await db.commit()
+    action = "kích hoạt" if target.is_active else "khóa"
+    return RedirectResponse(url=f"/admin/roles?message=Đã+{action}+tài+khoản+{target.username}", status_code=303)
 
 
 @router.get("/logout", response_class=HTMLResponse)

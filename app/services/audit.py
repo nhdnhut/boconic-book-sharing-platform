@@ -28,10 +28,13 @@ class AuditService:
         actor_type: str = "admin",
         diff_before: Optional[Dict[str, Any]] = None,
         diff_after: Optional[Dict[str, Any]] = None,
+        details: Optional[Dict[str, Any]] = None,
         reason: Optional[str] = None,
         ip_address: Optional[str] = None,
         correlation_id: Optional[str] = None,
     ) -> AuditLog:
+        if diff_after is None and details is not None:
+            diff_after = details
         entry = AuditLog(
             action=action,
             entity_type=entity_type,

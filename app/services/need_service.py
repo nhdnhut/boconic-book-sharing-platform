@@ -146,7 +146,7 @@ class NeedService:
 
         # Find candidate copies
         copy_query = select(BookCopy).where(
-            BookCopy.visibility == "published",
+            BookCopy.visibility.in_(["published", "public"]),
             BookCopy.owner_id != need.user_id,
         )
 

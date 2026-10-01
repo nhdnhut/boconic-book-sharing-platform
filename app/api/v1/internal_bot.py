@@ -144,6 +144,7 @@ async def bot_search_books(
                 "condition": c.condition,
                 "max_days": c.maximum_loan_days,
                 "is_mine": c.owner_id == actor.id,
+                "is_partial": c.is_partial,
             }
             for c in b.copies
             if c.circulation_status == "available"
@@ -1208,6 +1209,7 @@ class BotUploadDigitalPartialDTO(BaseModel):
     rights_basis: str = "personal_fair_use"
     consent_given: bool = True
     provenance: Optional[str] = None
+    is_public: bool = False
 
 
 @router.post("/partial-materials/physical")
@@ -1276,6 +1278,7 @@ async def bot_upload_digital_partial(
         rights_basis=dto.rights_basis,
         consent_given=dto.consent_given,
         provenance=dto.provenance,
+        is_public=dto.is_public,
     )
     await db.commit()
     return {
@@ -1324,6 +1327,82 @@ async def bot_delete_my_digital_partial(
     await PartialMaterialService.delete_digital_partial_resource(db=db, user_id=actor.id, resource_id=resource_id)
     await db.commit()
     return {"status": "success", "deleted_resource_id": resource_id}
+
+
+@router.get("/partial-materials/available")
+async def bot_search_available_partial_materials(
+    q: Optional[str] = Query(None),
+    limit: int = Query(10, ge=1, le=50),
+    actor: User = Depends(verify_bot_actor),
+    db: AsyncSession = Depends(get_db),
+):
+    """Search and list available physical partial copies and verified digital fragments in the community."""
+    from app.services.partial_material_service import PartialMaterialService
+    return await PartialMaterialService.search_available_partial_materials(
+        db=db,
+        query=q,
+        limit=limit,
+    )
+
+
+class BotQuickCreateBookDTO(BaseModel):
+    title: str
+    subject: Optional[str] = "Tài liệu học tập"
+    curriculum: Optional[str] = "Cộng đồng"
+
+
+@router.post("/books/quick-create")
+async def bot_quick_create_book(
+    dto: BotQuickCreateBookDTO,
+    actor: User = Depends(verify_bot_actor),
+    db: AsyncSession = Depends(get_db),
+):
+    """Instantly create a book entry so any user can upload or borrow arbitrary materials."""
+    from app.db.models.catalog import Book, Chapter
+    clean_title = dto.title.strip()
+    if not clean_title:
+        raise BoconicException(ErrorCode.VALIDATION_ERROR, "Tên tài liệu / sách không được để trống.", status_code=400)
+
+    book = Book(
+        title=clean_title,
+        subject=dto.subject or "Tài liệu học tập",
+        curriculum=dto.curriculum or "Cộng đồng",
+        language="vi",
+    )
+    db.add(book)
+    await db.flush()
+
+    chapter = Chapter(
+        book_id=book.id,
+        chapter_number=1,
+        title="Tài liệu & Trích đoạn chung",
+    )
+    db.add(chapter)
+    await db.commit()
+    return {
+        "status": "success",
+        "book_id": book.id,
+        "title": book.title,
+        "chapter_id": chapter.id,
+    }
+
+
+@router.get("/community/library")
+async def bot_get_community_library(
+    limit: int = Query(20, ge=1, le=50),
+    offset: int = Query(0, ge=0),
+    actor: User = Depends(verify_bot_actor),
+    db: AsyncSession = Depends(get_db),
+):
+    """Fetch all available community resources (full books, partial copies, digital resources)."""
+    from app.services.partial_material_service import PartialMaterialService
+    return await PartialMaterialService.get_all_community_available_resources(
+        db=db,
+        limit=limit,
+        offset=offset,
+    )
+
+
 
 
 

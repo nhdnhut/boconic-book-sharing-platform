@@ -426,12 +426,13 @@ async def upload_digital_partial_material(
     rights_basis: str = Form("personal_fair_use"),
     consent_given: bool = Form(True),
     provenance: Optional[str] = Form(None),
+    is_public: bool = Form(False),
     file: Optional[UploadFile] = File(None),
     db: AsyncSession = Depends(get_db),
 ):
     """
     Upload digital partial material (file or link) tied to a book chapter.
-    Enforces personal research fair-use pledge and puts resource into quarantine status.
+    Enforces personal research fair-use pledge and sets visibility.
     """
     file_bytes = None
     filename = None
@@ -461,6 +462,7 @@ async def upload_digital_partial_material(
         rights_basis=rights_basis,
         consent_given=consent_given,
         provenance=provenance,
+        is_public=is_public,
     )
     await db.commit()
     return {

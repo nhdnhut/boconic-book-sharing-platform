@@ -11,7 +11,7 @@ import hashlib
 import os
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
-from sqlalchemy import desc, func, select
+from sqlalchemy import and_, desc, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -87,13 +87,14 @@ class PartialMaterialService:
             "declared_at": utc_now().isoformat(),
         }
 
+        norm_vis = "published" if visibility in ("public", "published") else visibility
         # 1. Create BookCopy with is_partial = True
         copy = await CatalogService.add_book_copy(
             db=db,
             book_id=book_id,
             owner_id=user_id,
             condition=condition,
-            visibility=visibility,
+            visibility=norm_vis,
             format_type="physical",
             is_partial=True,
             coverage_summary=coverage_summary,
@@ -181,10 +182,11 @@ class PartialMaterialService:
         rights_basis: str = "personal_fair_use",
         consent_given: bool = True,
         provenance: Optional[str] = None,
+        is_public: bool = False,
     ) -> ChapterResource:
         """
         Upload digital partial material (file or link) attached to a book chapter.
-        Enforces fair-use consent, validates file size, and defaults to quarantine for rights review.
+        Enforces fair-use consent, validates file size, and defaults to quarantine for rights review unless public.
         """
         if not consent_given:
             raise BoconicException(
@@ -266,8 +268,8 @@ class PartialMaterialService:
             page_end=page_end,
             rights_basis=rights_basis,
             allowed_actions=["view"],
-            verification_status="quarantine", # Strict quarantine rule!
-            is_public=False,
+            verification_status="verified" if is_public else "quarantine",
+            is_public=is_public,
             version=1,
         )
         db.add(resource)
@@ -286,7 +288,8 @@ class PartialMaterialService:
                 "title": clean_title,
                 "resource_type": resource_type,
                 "rights_basis": rights_basis,
-                "verification_status": "quarantine",
+                "verification_status": resource.verification_status,
+                "is_public": is_public,
                 "has_file": bool(file_path_str),
             },
         )
@@ -469,3 +472,215 @@ class PartialMaterialService:
 
         filename = os.path.basename(resource.file_path)
         return resource.file_path, filename
+
+    @classmethod
+    async def search_available_partial_materials(
+        cls,
+        db: AsyncSession,
+        query: Optional[str] = None,
+        limit: int = 10,
+    ) -> Dict[str, Any]:
+        """
+        Query published and available physical partial copies (photocopies) and verified digital fragments.
+        """
+        # 1. Available physical partial copies
+        stmt = (
+            select(BookCopy)
+            .options(
+                selectinload(BookCopy.book),
+                selectinload(BookCopy.owner),
+                selectinload(BookCopy.coverage_ranges),
+            )
+            .join(Book, BookCopy.book_id == Book.id)
+            .where(
+                BookCopy.is_partial == True,
+                BookCopy.circulation_status == "available",
+                BookCopy.visibility.in_(["published", "public"]),
+            )
+        )
+        if query and query.strip():
+            kw = f"%{query.strip()}%"
+            stmt = stmt.where(
+                (Book.title.ilike(kw)) | (Book.subject.ilike(kw)) | (Book.curriculum.ilike(kw))
+            )
+
+        stmt = stmt.order_by(BookCopy.created_at.desc()).limit(limit)
+        res = await db.execute(stmt)
+        copies = res.scalars().all()
+
+        physical_list = []
+        for c in copies:
+            ranges = [
+                {
+                    "start_page": r.start_page,
+                    "end_page": r.end_page,
+                    "pages_count": (r.end_page - r.start_page + 1) if (r.start_page and r.end_page) else None,
+                    "chapters": r.chapters or [],
+                    "source": r.source_description,
+                }
+                for r in (c.coverage_ranges or [])
+            ]
+            physical_list.append({
+                "copy_id": c.id,
+                "public_code": c.public_code,
+                "book_id": c.book_id,
+                "book_title": c.book.title if c.book else "Sách không xác định",
+                "author": c.book.author if c.book else "",
+                "condition": c.condition,
+                "maximum_loan_days": c.maximum_loan_days,
+                "owner_id": c.owner_id,
+                "owner_alias": c.owner.public_alias if c.owner else "Thành viên",
+                "ranges": ranges,
+                "coverage_summary": c.coverage_summary,
+                "notes": c.notes,
+            })
+
+        # 2. Verified digital resources
+        res_stmt = (
+            select(ChapterResource)
+            .options(
+                selectinload(ChapterResource.chapter).selectinload(Chapter.book),
+                selectinload(ChapterResource.owner),
+            )
+            .join(Chapter, ChapterResource.chapter_id == Chapter.id)
+            .join(Book, Chapter.book_id == Book.id)
+            .where(
+                or_(
+                    ChapterResource.verification_status == "verified",
+                    and_(ChapterResource.is_public == True, ChapterResource.verification_status != "rejected"),
+                )
+            )
+        )
+        if query and query.strip():
+            kw = f"%{query.strip()}%"
+            res_stmt = res_stmt.where(
+                (ChapterResource.title.ilike(kw)) | (Book.title.ilike(kw))
+            )
+
+        res_stmt = res_stmt.order_by(ChapterResource.created_at.desc()).limit(limit)
+        digital_res = await db.execute(res_stmt)
+        resources = digital_res.scalars().all()
+
+        digital_list = []
+        for r in resources:
+            book_title = r.chapter.book.title if (r.chapter and r.chapter.book) else ""
+            digital_list.append({
+                "resource_id": r.id,
+                "title": r.title,
+                "book_title": book_title,
+                "chapter_number": r.chapter.chapter_number if r.chapter else None,
+                "chapter_title": r.chapter.title if r.chapter else None,
+                "page_start": r.page_start,
+                "page_end": r.page_end,
+                "url": r.url,
+                "has_file": bool(r.file_path),
+                "rights_basis": r.rights_basis,
+                "owner_alias": r.owner.public_alias if r.owner else "Thành viên",
+            })
+
+        return {
+            "physical_copies": physical_list,
+            "digital_resources": digital_list,
+            "total_physical": len(physical_list),
+            "total_digital": len(digital_list),
+        }
+
+    @classmethod
+    async def get_all_community_available_resources(
+        cls,
+        db: AsyncSession,
+        limit: int = 20,
+        offset: int = 0,
+    ) -> Dict[str, Any]:
+        """
+        Retrieve all available community library holdings (full books and partial copies)
+        plus discoverable digital materials.
+        """
+        from app.db.models.catalog import BookAuthor
+        # 1. All available copies
+        stmt = (
+            select(BookCopy)
+            .options(
+                selectinload(BookCopy.book).selectinload(Book.authors).selectinload(BookAuthor.author),
+                selectinload(BookCopy.owner),
+                selectinload(BookCopy.coverage_ranges),
+            )
+            .join(Book, BookCopy.book_id == Book.id)
+            .where(
+                BookCopy.circulation_status == "available",
+                BookCopy.visibility.in_(["published", "public"]),
+            )
+            .order_by(BookCopy.created_at.desc())
+            .offset(offset)
+            .limit(limit)
+        )
+        res = await db.execute(stmt)
+        copies = res.scalars().all()
+
+        available_copies = []
+        for c in copies:
+            author_names = ", ".join([a.author.name for a in (c.book.authors or [])]) if c.book else ""
+            ranges = [
+                {
+                    "start_page": r.start_page,
+                    "end_page": r.end_page,
+                    "pages_count": (r.end_page - r.start_page + 1) if (r.start_page and r.end_page) else None,
+                    "chapters": r.chapters or [],
+                }
+                for r in (c.coverage_ranges or [])
+            ]
+            available_copies.append({
+                "copy_id": c.id,
+                "public_code": c.public_code,
+                "book_id": c.book_id,
+                "book_title": c.book.title if c.book else "Sách",
+                "author": author_names or (c.book.author if c.book else ""),
+                "is_partial": c.is_partial,
+                "condition": c.condition,
+                "maximum_loan_days": c.maximum_loan_days,
+                "owner_id": c.owner_id,
+                "owner_alias": c.owner.public_alias if c.owner else "Thành viên",
+                "ranges": ranges,
+                "notes": c.notes,
+            })
+
+        # 2. Public / verified digital resources
+        dig_stmt = (
+            select(ChapterResource)
+            .options(
+                selectinload(ChapterResource.chapter).selectinload(Chapter.book),
+                selectinload(ChapterResource.owner),
+            )
+            .where(
+                or_(
+                    ChapterResource.verification_status == "verified",
+                    and_(ChapterResource.is_public == True, ChapterResource.verification_status != "rejected"),
+                )
+            )
+            .order_by(ChapterResource.created_at.desc())
+            .limit(limit)
+        )
+        dig_res = await db.execute(dig_stmt)
+        digital_resources = [
+            {
+                "resource_id": r.id,
+                "title": r.title,
+                "book_title": r.chapter.book.title if (r.chapter and r.chapter.book) else "Tài liệu học tập",
+                "chapter_number": r.chapter.chapter_number if r.chapter else None,
+                "page_start": r.page_start,
+                "page_end": r.page_end,
+                "url": r.url,
+                "has_file": bool(r.file_path),
+                "owner_alias": r.owner.public_alias if r.owner else "Thành viên",
+            }
+            for r in dig_res.scalars().all()
+        ]
+
+        return {
+            "available_copies": available_copies,
+            "digital_resources": digital_resources,
+            "total_copies": len(available_copies),
+            "total_digital": len(digital_resources),
+        }
+
+

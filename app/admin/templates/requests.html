@@ -57,9 +57,9 @@
         <td>{{ req.quantity_fulfilled }} / {{ req.quantity }}</td>
         <td>
           {% if req.urgency == 'critical' %}
-          <span class="badge badge-danger">Rất gấp 🔥</span>
+          <span class="badge badge-danger">Rất gấp</span>
           {% elif req.urgency == 'urgent' %}
-          <span class="badge badge-warning">Cần gấp ⚡</span>
+          <span class="badge badge-warning">Cần gấp</span>
           {% else %}
           <span class="badge badge-info">Bình thường</span>
           {% endif %}

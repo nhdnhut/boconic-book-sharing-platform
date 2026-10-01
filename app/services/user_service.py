@@ -195,6 +195,7 @@ class UserService:
                 "loan": loan,
                 "book": loan.copy.book if loan.copy else None,
                 "copy": loan.copy,
+                "book_copy": loan.copy,
                 "lender": loan.lender,
                 "is_overdue": is_overdue,
                 "due_at": due,
@@ -224,6 +225,7 @@ class UserService:
                 "loan": loan,
                 "book": loan.copy.book if loan.copy else None,
                 "copy": loan.copy,
+                "book_copy": loan.copy,
                 "borrower": loan.borrower,
                 "is_overdue": is_overdue,
                 "due_at": due,
@@ -503,7 +505,8 @@ class UserService:
                 "book_title": c.book.title if c.book else "N/A",
                 "is_partial": c.is_partial,
                 "circulation_status": c.circulation_status,
-                "condition_status": c.condition_status,
+                "condition_status": c.condition,
+                "condition": c.condition,
                 "current_holder_id": c.current_holder_id,
             })
 
@@ -518,7 +521,7 @@ class UserService:
                 "title": r.title,
                 "url": r.url,
                 "rights_status": r.verification_status,
-                "created_at": r.created_at.isoformat(),
+                "created_at": r.created_at.isoformat() if r.created_at else None,
             })
 
         needs = []
@@ -530,7 +533,7 @@ class UserService:
                 "scope_type": req.scope_type,
                 "target_chapters": req.target_chapters,
                 "revalidation_required": req.revalidation_required,
-                "created_at": req.created_at.isoformat(),
+                "created_at": req.created_at.isoformat() if req.created_at else None,
             })
 
         return {

@@ -1,4 +1,5 @@
 import uuid
+from typing import Optional
 from datetime import datetime, timezone
 from sqlalchemy import (
     Boolean, CheckConstraint, Column, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint, JSON
@@ -138,6 +139,10 @@ class BookCopy(Base):
         if not self.custom_data:
             self.custom_data = {}
         self.custom_data["barcode"] = val
+
+    @property
+    def condition_status(self) -> str:
+        return self.condition
 
 class CopyCoverageRange(Base):
     __tablename__ = "copy_coverage_ranges"
