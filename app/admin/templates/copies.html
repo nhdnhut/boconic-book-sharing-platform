@@ -1,0 +1,50 @@
+{% extends "base.html" %}
+
+{% block title %}Bản sách vật lý{% endblock %}
+{% block page_title %}Quản lý Bản sách vật lý (Book Copies){% endblock %}
+
+{% block content %}
+<div class="data-card">
+  <div class="card-header">
+    <h2 class="card-title">Danh sách bản sách vật lý ({{ copies|length }})</h2>
+  </div>
+  <div class="table-responsive">
+    <table>
+      <thead>
+        <tr>
+          <th>Mã bản sách</th>
+          <th>Tên sách</th>
+          <th>Chủ sở hữu</th>
+          <th>Người đang giữ</th>
+          <th>Tình trạng</th>
+          <th>Trạng thái lưu thông</th>
+          <th>Thời hạn tối đa</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% if copies %}
+          {% for c in copies %}
+          <tr>
+            <td><code>{{ c.public_code }}</code></td>
+            <td><strong>{{ c.book.title if c.book else 'N/A' }}</strong></td>
+            <td>{{ c.owner.public_alias if c.owner else 'N/A' }}</td>
+            <td>{{ c.current_holder.public_alias if c.current_holder else 'N/A' }}</td>
+            <td>{{ c.condition }}</td>
+            <td>
+              <span class="badge badge-{{ c.circulation_status }}">{{ c.circulation_status }}</span>
+            </td>
+            <td>{{ c.maximum_loan_days }} ngày</td>
+          </tr>
+          {% endfor %}
+        {% else %}
+          <tr>
+            <td colspan="7" style="text-align: center; color: var(--text-muted); padding: 32px;">
+              Chưa có bản sách vật lý nào.
+            </td>
+          </tr>
+        {% endif %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endblock %}

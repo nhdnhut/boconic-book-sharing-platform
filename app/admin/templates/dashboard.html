@@ -1,0 +1,84 @@
+{% extends "base.html" %}
+
+{% block title %}Bảng điều khiển{% endblock %}
+{% block page_title %}Bảng điều khiển vận hành{% endblock %}
+
+{% block content %}
+<div class="metrics-grid">
+  <div class="metric-card">
+    <div class="metric-label">Người dùng đã đăng ký</div>
+    <div class="metric-value">{{ metrics.users_count }}</div>
+  </div>
+  <div class="metric-card">
+    <div class="metric-label">Đầu sách trong Catalog</div>
+    <div class="metric-value">{{ metrics.books_count }}</div>
+  </div>
+  <div class="metric-card">
+    <div class="metric-label">Bản sách vật lý</div>
+    <div class="metric-value">{{ metrics.copies_count }}</div>
+  </div>
+  <div class="metric-card">
+    <div class="metric-label">Bản khả dụng cho mượn</div>
+    <div class="metric-value highlight-teal">{{ metrics.available_copies_count }}</div>
+  </div>
+  <div class="metric-card">
+    <div class="metric-label">Lượt sách đang mượn</div>
+    <div class="metric-value">{{ metrics.active_loans_count }}</div>
+  </div>
+  <div class="metric-card">
+    <div class="metric-label">Đang giữ chỗ chờ giao</div>
+    <div class="metric-value highlight-amber">{{ metrics.reserved_loans_count }}</div>
+  </div>
+  <div class="metric-card">
+    <div class="metric-label">Lượt mượn quá hạn</div>
+    <div class="metric-value highlight-red">{{ metrics.overdue_loans_count }}</div>
+  </div>
+  <div class="metric-card">
+    <div class="metric-label">Báo cáo vi phạm mở</div>
+    <div class="metric-value">{{ metrics.unresolved_reports_count }}</div>
+  </div>
+</div>
+
+<div class="data-card">
+  <div class="card-header">
+    <h2 class="card-title">Các lượt mượn gần đây</h2>
+    <a href="/admin/loans" class="btn btn-secondary">Xem toàn bộ</a>
+  </div>
+  <div class="table-responsive">
+    <table>
+      <thead>
+        <tr>
+          <th>Mã sách</th>
+          <th>Tên đầu sách</th>
+          <th>Người mượn</th>
+          <th>Chủ sách</th>
+          <th>Trạng thái</th>
+          <th>Hạn trả</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% if recent_loans %}
+          {% for l in recent_loans %}
+          <tr>
+            <td><strong>{{ l.copy.public_code if l.copy else 'N/A' }}</strong></td>
+            <td>{{ l.copy.book.title if l.copy and l.copy.book else 'N/A' }}</td>
+            <td>{{ l.borrower.public_alias if l.borrower else 'N/A' }}</td>
+            <td>{{ l.lender.public_alias if l.lender else 'N/A' }}</td>
+            <td>
+              <span class="badge badge-{{ l.status }}">{{ l.status }}</span>
+            </td>
+            <td>{{ l.due_at.strftime('%d/%m/%Y') if l.due_at else 'Chưa giao' }}</td>
+          </tr>
+          {% endfor %}
+        {% else %}
+          <tr>
+            <td colspan="6" style="text-align: center; color: var(--text-muted); padding: 32px;">
+              Chưa có lượt mượn nào được tạo.
+            </td>
+          </tr>
+        {% endif %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endblock %}

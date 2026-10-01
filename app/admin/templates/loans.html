@@ -1,0 +1,79 @@
+{% extends "base.html" %}
+
+{% block title %}Lượt mượn sách{% endblock %}
+{% block page_title %}Quản trị Giao dịch Mượn & Tranh chấp (Loans){% endblock %}
+
+{% block content %}
+<div class="data-card">
+  <div class="card-header">
+    <h2 class="card-title">Tất cả lượt mượn ({{ loans|length }})</h2>
+  </div>
+  <div class="table-responsive">
+    <table>
+      <thead>
+        <tr>
+          <th>Mã sách</th>
+          <th>Tên sách</th>
+          <th>Người mượn</th>
+          <th>Chủ sách</th>
+          <th>Trạng thái</th>
+          <th>Ngày nhận</th>
+          <th>Hạn trả</th>
+          <th>Hành động</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% if loans %}
+          {% for l in loans %}
+          <tr>
+            <td><code>{{ l.copy.public_code if l.copy else 'N/A' }}</code></td>
+            <td><strong>{{ l.copy.book.title if l.copy and l.copy.book else 'N/A' }}</strong></td>
+            <td>{{ l.borrower.public_alias if l.borrower else 'N/A' }}</td>
+            <td>{{ l.lender.public_alias if l.lender else 'N/A' }}</td>
+            <td>
+              <span class="badge badge-{{ l.status }}">{{ l.status }}</span>
+            </td>
+            <td>{{ l.handed_over_at.strftime('%d/%m/%Y %H:%M') if l.handed_over_at else 'Chưa giao' }}</td>
+            <td>{{ l.due_at.strftime('%d/%m/%Y') if l.due_at else '—' }}</td>
+            <td>
+              {% if l.status == 'disputed' %}
+                <button class="btn btn-secondary" onclick="openDisputeModal('{{ l.id }}')">
+                  Xử lý tranh chấp
+                </button>
+              {% else %}
+                <span style="color: var(--text-muted); font-size: 0.8rem;">Bình thường</span>
+              {% endif %}
+            </td>
+          </tr>
+          {% endfor %}
+        {% else %}
+          <tr>
+            <td colspan="8" style="text-align: center; color: var(--text-muted); padding: 32px;">
+              Chưa có lượt mượn nào trong hệ thống.
+            </td>
+          </tr>
+        {% endif %}
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<!-- Simple Dispute Resolution Modal Script -->
+<script>
+  function openDisputeModal(loanId) {
+    const reason = prompt("Nhập lý do / căn cứ kết luận xử lý tranh chấp:");
+    if (!reason) return;
+    const resolution = prompt("Chọn hướng xử lý (nhập chính xác: 'returned' hoặc 'closed_lost' hoặc 'active'):", "returned");
+    if (!resolution) return;
+
+    fetch("/api/v1/admin/loans/" + loanId + "/resolve-dispute", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ resolution: resolution, reason: reason })
+    }).then(res => res.json()).then(data => {
+      alert(data.message || "Xử lý thành công!");
+      window.location.reload();
+    }).catch(err => alert("Lỗi: " + err));
+  }
+</script>
+{% endblock %}
