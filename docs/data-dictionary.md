@@ -93,8 +93,45 @@
 | `custom_data` | JSONB | No | Default: '{}' | Dynamic custom fields | Public |
 
 ### `chapters`
-- `id` (UUID), `book_id` (FK -> books.id), `chapter_number` (INT), `title` (VARCHAR), `page_start` (INT), `page_end` (INT), `topics` (JSONB array), `source` (VARCHAR).
+- `id` (UUID), `book_id` (FK -> books.id), `chapter_number` (INT), `chapter_code` (VARCHAR), `title` (VARCHAR), `page_start` (INT), `page_end` (INT), `topics` (JSONB array), `source` (VARCHAR).
 - Constraint: `page_start <= page_end`.
+
+### `copy_coverage_ranges` (Partial Photocopy Coverage)
+| Column | Type | Nullable | Constraints / Default | Description | Privacy Level |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+| `id` | UUID | No | Primary Key | Interval range identifier | Public |
+| `copy_id` | UUID | No | FK -> book_copies.id | Associated BookCopy (`is_partial=True`) | Public |
+| `start_page` | INT | No | >= 1 | Start page number | Public |
+| `end_page` | INT | No | >= start_page | End page number | Public |
+| `pagination_basis`| VARCHAR(64)| No | Default: 'edition_page_numbers' | Pagination coordinate system | Public |
+| `chapters` | JSONB | No | Default: '[]' | Chapter index list covered | Public |
+| `source_description`| VARCHAR(255)| Yes | None | Personal photocopy provenance | Public |
+| `verification_status`| VARCHAR(32)| No | Default: 'unverified' | unverified, verified, rejected | Internal |
+
+### `chapter_resources` (Digital Fragments & Links)
+| Column | Type | Nullable | Constraints / Default | Description | Privacy Level |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+| `id` | UUID | No | Primary Key | Digital resource identifier | Public |
+| `book_id` | UUID | No | FK -> books.id | Associated book | Public |
+| `chapter_id` | UUID | No | FK -> chapters.id | Attached chapter | Public |
+| `owner_id` | UUID | No | FK -> users.id | Uploader / Declarant | Internal |
+| `title` | VARCHAR(255)| No | None | Resource title | Public |
+| `resource_type` | VARCHAR(64)| No | Default: 'digital_fragment'| file, link, notes | Public |
+| `url` | TEXT | Yes | None | Resource link | Public |
+| `file_path` | TEXT | Yes | None | Local path in `data/storage/` | Restricted |
+| `checksum_sha256` | VARCHAR(64)| Yes | None | SHA-256 integrity hash | Public |
+| `page_start` | INT | Yes | None | Excerpt start page | Public |
+| `page_end` | INT | Yes | None | Excerpt end page | Public |
+| `rights_basis` | VARCHAR(64)| No | Default: 'personal_fair_use' | Legal/Fair use basis | Public |
+| `verification_status`| VARCHAR(32)| No | Default: 'quarantine' | quarantine, verified, rejected | Internal |
+| `is_public` | BOOLEAN | No | Default: False | Public visibility toggle | Public |
+
+### `user_chapter_progress` (Private Study Tracking)
+- `id` (UUID), `user_id` (FK -> users.id), `book_id` (FK -> books.id), `chapter_id` (FK -> chapters.id), `reading_state` (`not_started`, `in_progress`, `completed`), `bookmark_page` (INT), `bookmark_note` (TEXT), `personal_notes` (TEXT).
+- Strict privacy: isolated to owning user only (`Restricted`). Never alters loan state or community trust score.
+
+### `chapter_proposals` (Community Catalog Crowdsourcing)
+- `id` (UUID), `book_id` (FK -> books.id), `chapter_id` (FK -> chapters.id, nullable), `proposer_id` (FK -> users.id), `action` (`add_chapter`, `edit_chapter`, `split_chapter`, `delete_chapter`), `status` (`pending`, `approved`, `rejected`), `base_version` (INT), `proposed_data` (JSONB), `reason` (TEXT), `source_evidence` (TEXT).
 
 ---
 

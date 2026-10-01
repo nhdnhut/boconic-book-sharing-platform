@@ -78,4 +78,82 @@
     </tbody>
   </table>
 </div>
+
+<div class="card" style="margin-top: 1.5rem;">
+  <div style="font-weight: 700; font-size: 1.1rem; color: #0f172a; margin-bottom: 0.75rem;">
+    💾 Tài nguyên số & Trích đoạn theo chương (Digital Fragments & Excerpts)
+  </div>
+  <table class="data-table">
+    <thead>
+      <tr>
+        <th>Tiêu đề & Trích đoạn</th>
+        <th>Đầu sách</th>
+        <th>Chương</th>
+        <th>Người tải lên</th>
+        <th>Cơ sở quyền</th>
+        <th>Trạng thái kiểm duyệt</th>
+        <th>Thao tác</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for res_item, chapter, book, owner_alias in digital_items %}
+      <tr>
+        <td>
+          <strong>{{ res_item.title }}</strong>
+          {% if res_item.url %}
+          <div style="font-size: 0.75rem; color: #2563eb;"><a href="{{ res_item.url }}" target="_blank">🔗 Mở liên kết</a></div>
+          {% endif %}
+          {% if res_item.file_path %}
+          <div style="font-size: 0.75rem; color: #059669; margin-top: 2px;">
+            <a href="/admin/partial-materials/digital/{{ res_item.id }}/file" target="_blank" style="color: #059669; text-decoration: underline;">
+              💾 <strong>Tải tệp đính kèm</strong>
+            </a>
+          </div>
+          {% endif %}
+          {% if res_item.page_start and res_item.page_end %}
+          <div style="font-size: 0.75rem; color: #64748b;">Trang {{ res_item.page_start }}–{{ res_item.page_end }}</div>
+          {% endif %}
+        </td>
+        <td>
+          <strong>{{ book.title }}</strong>
+        </td>
+        <td>Chương {{ chapter.chapter_number }}: {{ chapter.title }}</td>
+        <td>@{{ owner_alias }}</td>
+        <td>
+          <span class="badge" style="background: #e0f2fe; color: #0369a1;">{{ res_item.rights_basis }}</span>
+        </td>
+        <td>
+          {% if res_item.verification_status == 'verified' %}
+          <span class="badge badge-success">Đã duyệt (Công khai)</span>
+          {% elif res_item.verification_status == 'rejected' %}
+          <span class="badge badge-danger">Từ chối</span>
+          {% elif res_item.verification_status == 'quarantine' %}
+          <span class="badge badge-warning" style="background: #fef3c7; color: #92400e;">⏳ Cách ly (Quarantine)</span>
+          {% else %}
+          <span class="badge badge-warning">{{ res_item.verification_status }}</span>
+          {% endif %}
+        </td>
+        <td>
+          {% if res_item.verification_status == 'quarantine' or res_item.verification_status == 'pending_review' %}
+          <form action="/admin/partial-materials/digital/{{ res_item.id }}/verify" method="POST" style="display: inline;">
+            <button type="submit" class="btn btn-sm btn-primary">Duyệt chia sẻ</button>
+          </form>
+          <form action="/admin/partial-materials/digital/{{ res_item.id }}/reject" method="POST" style="display: inline; margin-left: 4px;">
+            <button type="submit" class="btn btn-sm btn-danger">Từ chối</button>
+          </form>
+          {% else %}
+          <span style="font-size: 0.75rem; color: #94a3b8;">Đã xử lý</span>
+          {% endif %}
+        </td>
+      </tr>
+      {% else %}
+      <tr>
+        <td colspan="7" style="text-align: center; color: #94a3b8; padding: 2rem;">
+          Không có tài nguyên số nào cần xem xét.
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
 {% endblock %}

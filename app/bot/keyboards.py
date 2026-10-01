@@ -12,10 +12,11 @@ def get_main_menu_keyboard(is_admin: bool = False) -> ReplyKeyboardMarkup:
         [KeyboardButton(text="🔎 Tìm sách"), KeyboardButton(text="📚 Thư viện của tôi")],
         [KeyboardButton(text="🎒 Tài nguyên đang dùng"), KeyboardButton(text="📖 Quản lý theo chương")],
         [KeyboardButton(text="📢 Yêu cầu sách"), KeyboardButton(text="📋 Nhu cầu của tôi")],
-        [KeyboardButton(text="➕ Đăng sách"), KeyboardButton(text="📋 Yêu cầu mượn")],
+        [KeyboardButton(text="➕ Đăng sách"), KeyboardButton(text="📑 Up tài liệu 1 phần")],
         [KeyboardButton(text="🤝 Đang mượn"), KeyboardButton(text="📤 Đang cho mượn")],
-        [KeyboardButton(text="🌐 Thư viện cộng đồng"), KeyboardButton(text="🔗 Tài nguyên mở")],
-        [KeyboardButton(text="👤 Hồ sơ & Cài đặt"), KeyboardButton(text="🚩 Báo cáo / Hỗ trợ")],
+        [KeyboardButton(text="📋 Yêu cầu mượn"), KeyboardButton(text="🌐 Thư viện cộng đồng")],
+        [KeyboardButton(text="🔗 Tài nguyên mở"), KeyboardButton(text="👤 Hồ sơ & Cài đặt")],
+        [KeyboardButton(text="🚩 Báo cáo / Hỗ trợ")],
     ]
     if is_admin:
         keyboard.append([KeyboardButton(text="👑 Quản trị hệ thống")])
@@ -248,5 +249,91 @@ def get_need_offer_actions_keyboard(offer_id: str) -> InlineKeyboardMarkup:
             InlineKeyboardButton(text="❌ Từ chối", callback_data=f"dec_o:{offer_id}"),
         ]
     ])
+
+
+def get_partial_type_keyboard() -> InlineKeyboardMarkup:
+    """Choose whether to declare a physical photocopy or upload a digital fragment."""
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text="📕 Khai báo bản photocopy / giấy", callback_data="ptp:physical"),
+        ],
+        [
+            InlineKeyboardButton(text="💾 Tải lên liên kết / tài liệu số", callback_data="ptp:digital"),
+        ],
+        [
+            InlineKeyboardButton(text="❌ Hủy bỏ", callback_data="ptp:cancel"),
+        ],
+    ])
+
+
+def get_partial_fair_use_keyboard() -> InlineKeyboardMarkup:
+    """Fair use compliance agreement before uploading digital excerpts."""
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text="⚖️ Tôi cam kết dùng cho học tập cá nhân", callback_data="pfu:accept"),
+        ],
+        [
+            InlineKeyboardButton(text="❌ Hủy bỏ", callback_data="pfu:cancel"),
+        ],
+    ])
+
+
+def get_partial_visibility_keyboard() -> InlineKeyboardMarkup:
+    """Choose visibility for photocopy partial holding."""
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text="🔒 Riêng tư (Khuyến nghị)", callback_data="pvis:private"),
+        ],
+        [
+            InlineKeyboardButton(text="👥 Bạn bè / Nhóm học", callback_data="pvis:internal"),
+        ],
+        [
+            InlineKeyboardButton(text="🌐 Công khai cộng đồng", callback_data="pvis:public"),
+        ],
+    ])
+
+
+def get_partial_condition_inline_keyboard() -> InlineKeyboardMarkup:
+    """Inline buttons to select condition for partial photocopy."""
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text="Mới (Bản in đẹp, rõ nét)", callback_data="pcond:new"),
+            InlineKeyboardButton(text="Rất tốt (Sạch sẽ, đủ trang)", callback_data="pcond:like_new"),
+        ],
+        [
+            InlineKeyboardButton(text="Tốt (Có thể có highlight)", callback_data="pcond:good"),
+            InlineKeyboardButton(text="Khá (Hơi cũ, đọc tốt)", callback_data="pcond:fair"),
+        ],
+    ])
+
+
+def get_partial_item_actions_keyboard(item_type: str, item_id: str) -> InlineKeyboardMarkup:
+    """Action button to delete a personal partial copy or digital resource."""
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text="🗑️ Xóa khỏi tài khoản", callback_data=f"dpart:{item_type}:{item_id}"),
+        ]
+    ])
+
+
+def get_my_partial_management_keyboard(physical_items: list, digital_items: list) -> InlineKeyboardMarkup:
+    """Build interactive action buttons for items in /mypartial."""
+    buttons = []
+    for idx, p in enumerate(physical_items[:5], 1):
+        b_title = p.get("book_title", "Sách")[:16]
+        buttons.append([
+            InlineKeyboardButton(text=f"🗑️ Xóa bản photo #{idx} ({b_title})", callback_data=f"dpart:physical:{p['copy_id']}")
+        ])
+    for idx, d in enumerate(digital_items[:5], 1):
+        d_title = d.get("title", "Tài liệu")[:16]
+        buttons.append([
+            InlineKeyboardButton(text=f"🗑️ Xóa tài liệu #{idx} ({d_title})", callback_data=f"dpart:digital:{d['resource_id']}")
+        ])
+    buttons.append([
+        InlineKeyboardButton(text="➕ Thêm tài liệu mới", callback_data="ptp:start_new"),
+        InlineKeyboardButton(text="🔄 Làm mới danh sách", callback_data="ptp:refresh_list"),
+    ])
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
 
 

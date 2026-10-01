@@ -2,11 +2,12 @@
 User-scoped personal API routes: /me/library, /me/needs, /me/offers, /me/loans, /me/warnings, and batch inventory.
 """
 from typing import Any, Dict, List, Optional
-from fastapi import APIRouter, Depends, Header, Query
+from fastapi import APIRouter, Depends, File, Form, Header, Query, UploadFile
 from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.config import settings
 from app.core.errors import BoconicException, ErrorCode
 from app.db.models.catalog import Book, BookCopy
 from app.db.models.community import CommunityRequest, SupportOffer
@@ -15,6 +16,7 @@ from app.db.models.lending import Loan
 from app.db.session import get_db
 from app.services.catalog import CatalogService
 from app.services.library_service import LibraryService
+from app.services.partial_material_service import PartialMaterialService
 from app.services.warning_service import WarningService
 
 
@@ -343,5 +345,213 @@ async def get_my_active_resources(
     """
     from app.services.user_service import UserService
     return await UserService.get_user_resources_summary_api(db, user_id=user_id)
+
+
+# ==========================================
+# PARTIAL MATERIALS (TÀI LIỆU TỪNG PHẦN)
+# ==========================================
+
+class CreatePhysicalPartialDTO(BaseModel):
+    user_id: str
+    book_id: str
+    start_page: int
+    end_page: int
+    chapters: Optional[List[Any]] = None
+    condition: str = "good"
+    source_description: Optional[str] = None
+    visibility: str = "private"
+    storage_location_private: Optional[str] = None
+    notes: Optional[str] = None
+    barcode: Optional[str] = None
+
+
+class CreateDigitalPartialJSONDTO(BaseModel):
+    user_id: str
+    book_id: str
+    chapter_id: Optional[str] = None
+    title: str = "Tài liệu học tập"
+    resource_type: str = "digital_fragment"
+    url: Optional[str] = None
+    page_start: Optional[int] = None
+    page_end: Optional[int] = None
+    rights_basis: str = "personal_fair_use"
+    consent_given: bool = True
+    provenance: Optional[str] = None
+
+
+@router.post("/partial-materials/physical")
+async def declare_physical_partial_material(
+    dto: CreatePhysicalPartialDTO,
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Declare a personal physical photocopy or partial holding in user account.
+    Defaults to private visibility per fair-use copyright policy.
+    """
+    copy, coverage_range = await PartialMaterialService.create_physical_partial_material(
+        db=db,
+        user_id=dto.user_id,
+        book_id=dto.book_id,
+        start_page=dto.start_page,
+        end_page=dto.end_page,
+        chapters=dto.chapters,
+        condition=dto.condition,
+        source_description=dto.source_description,
+        visibility=dto.visibility,
+        storage_location_private=dto.storage_location_private,
+        notes=dto.notes,
+        barcode=dto.barcode,
+    )
+    await db.commit()
+    return {
+        "status": "success",
+        "copy_id": copy.id,
+        "public_code": copy.public_code,
+        "range_id": coverage_range.id,
+        "coverage_summary": copy.coverage_summary,
+        "visibility": copy.visibility,
+    }
+
+
+@router.post("/partial-materials/digital")
+async def upload_digital_partial_material(
+    user_id: str = Form(...),
+    book_id: str = Form(...),
+    chapter_id: Optional[str] = Form(None),
+    title: str = Form("Tài liệu học tập"),
+    resource_type: str = Form("digital_fragment"),
+    url: Optional[str] = Form(None),
+    page_start: Optional[int] = Form(None),
+    page_end: Optional[int] = Form(None),
+    rights_basis: str = Form("personal_fair_use"),
+    consent_given: bool = Form(True),
+    provenance: Optional[str] = Form(None),
+    file: Optional[UploadFile] = File(None),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Upload digital partial material (file or link) tied to a book chapter.
+    Enforces personal research fair-use pledge and puts resource into quarantine status.
+    """
+    file_bytes = None
+    filename = None
+    if file and file.filename:
+        file_bytes = await file.read()
+        max_bytes = settings.UPLOAD_MAX_MB * 1024 * 1024
+        if len(file_bytes) > max_bytes:
+            raise BoconicException(
+                ErrorCode.VALIDATION_ERROR,
+                f"Tệp tải lên vượt quá dung lượng tối đa cho phép ({settings.UPLOAD_MAX_MB}MB).",
+                status_code=400,
+            )
+        filename = file.filename
+
+    resource = await PartialMaterialService.create_digital_partial_material(
+        db=db,
+        user_id=user_id,
+        book_id=book_id,
+        chapter_id=chapter_id or "auto",
+        title=title,
+        resource_type=resource_type,
+        url=url,
+        file_bytes=file_bytes,
+        filename=filename,
+        page_start=page_start,
+        page_end=page_end,
+        rights_basis=rights_basis,
+        consent_given=consent_given,
+        provenance=provenance,
+    )
+    await db.commit()
+    return {
+        "status": "success",
+        "resource_id": resource.id,
+        "title": resource.title,
+        "chapter_id": resource.chapter_id,
+        "book_id": resource.book_id,
+        "verification_status": resource.verification_status,
+        "is_public": resource.is_public,
+        "has_file": bool(resource.file_path),
+    }
+
+
+@router.post("/partial-materials/digital/json")
+async def declare_digital_partial_json(
+    dto: CreateDigitalPartialJSONDTO,
+    db: AsyncSession = Depends(get_db),
+):
+    """Declare a digital link or notes partial material via JSON payload."""
+    resource = await PartialMaterialService.create_digital_partial_material(
+        db=db,
+        user_id=dto.user_id,
+        book_id=dto.book_id,
+        chapter_id=dto.chapter_id or "auto",
+        title=dto.title,
+        resource_type=dto.resource_type,
+        url=dto.url,
+        page_start=dto.page_start,
+        page_end=dto.page_end,
+        rights_basis=dto.rights_basis,
+        consent_given=dto.consent_given,
+        provenance=dto.provenance,
+    )
+    await db.commit()
+    return {
+        "status": "success",
+        "resource_id": resource.id,
+        "title": resource.title,
+        "chapter_id": resource.chapter_id,
+        "book_id": resource.book_id,
+        "verification_status": resource.verification_status,
+        "is_public": resource.is_public,
+        "has_file": bool(resource.file_path),
+    }
+
+
+@router.get("/partial-materials")
+async def get_my_partial_materials(
+    user_id: str = Query(..., description="User ID"),
+    db: AsyncSession = Depends(get_db),
+):
+    """List all physical and digital partial materials owned by the user."""
+    return await PartialMaterialService.get_user_partial_materials(db=db, user_id=user_id)
+
+
+@router.get("/partial-materials/digital/{resource_id}/file")
+async def download_my_digital_partial_file(
+    resource_id: str,
+    user_id: str = Query(..., description="User ID"),
+    db: AsyncSession = Depends(get_db),
+):
+    """Download personal uploaded file attached to chapter resource."""
+    from fastapi.responses import FileResponse
+    file_path, filename = await PartialMaterialService.get_digital_partial_file(
+        db=db, user_id=user_id, resource_id=resource_id, is_admin=False
+    )
+    return FileResponse(path=file_path, filename=filename, media_type="application/octet-stream")
+
+
+@router.delete("/partial-materials/physical/{copy_id}")
+async def delete_my_physical_partial_copy(
+    copy_id: str,
+    user_id: str = Query(..., description="User ID"),
+    db: AsyncSession = Depends(get_db),
+):
+    """Delete a personal partial physical copy if not currently in an active or reserved loan."""
+    await PartialMaterialService.delete_physical_partial_copy(db=db, user_id=user_id, copy_id=copy_id)
+    await db.commit()
+    return {"status": "success", "deleted_copy_id": copy_id}
+
+
+@router.delete("/partial-materials/digital/{resource_id}")
+async def delete_my_digital_partial_resource(
+    resource_id: str,
+    user_id: str = Query(..., description="User ID"),
+    db: AsyncSession = Depends(get_db),
+):
+    """Delete a personal digital excerpt resource and clean up stored file."""
+    await PartialMaterialService.delete_digital_partial_resource(db=db, user_id=user_id, resource_id=resource_id)
+    await db.commit()
+    return {"status": "success", "deleted_resource_id": resource_id}
 
 

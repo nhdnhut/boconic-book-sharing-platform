@@ -80,3 +80,43 @@ Boconic không tự động cấm tài khoản chỉ vì người dùng khai bá
 | `conduct_warning` | Nhắc nhở ứng xử sau kiểm duyệt | Cảnh báo về việc không đến điểm hẹn nhận sách đã cam kết. |
 
 Thành viên nhận cảnh báo có quyền bấm **"Xác nhận đã đọc"** hoặc gửi **"Khiếu nại (Appeal)"** kèm lý do để Quản trị viên xem xét lại một cách công bằng.
+
+---
+
+## 6. Tính năng Quản lý & Tải lên Tài liệu từng phần trong Tài khoản (User Account)
+
+Boconic phiên bản 3.2 chính thức cung cấp giao diện và API cho phép người dùng tự quản lý tài liệu từng phần:
+
+### 6.1. Khai báo bản photocopy / tài liệu giấy vật lý
+- **Đặc điểm:** Người dùng lưu giữ bản photo các trang sách phục vụ học tập.
+- **Quy tắc:**
+  - Mặc định quyền riêng tư: **`visibility = "private"`** (chỉ người dùng nhìn thấy trong kho cá nhân).
+  - Tự động xác thực logic trang: `1 <= start_page <= end_page <= total_pages`.
+  - Tự động tạo bản ghi `BookCopy` (`is_partial = True`), `CopyCoverageRange` (`unverified`), `CustodyEvent`, và phát sinh outbox event `PARTIAL_COPY_DECLARED`.
+- **Kênh thao tác:**
+  - Bot Telegram: Lệnh `/uppartial` hoặc phím **"📑 Up tài liệu 1 phần"** -> chọn **"📕 Khai báo bản photocopy / giấy"**.
+  - Web API: `POST /api/v1/me/partial-materials/physical`.
+  - Quản trị viên tại bàn thư viện (Desk Librarian): Thao tác tại `/admin/users/{user_id}` qua nút **"➕ Khai báo photocopy 1 phần"**.
+
+### 6.2. Tải lên tài liệu số / Trích đoạn theo chương
+- **Đặc điểm:** Tải lên tệp tin học liệu (slide, bài tập, ghi chú) hoặc liên kết web/Drive gắn với một chương sách cụ thể.
+- **Quy tắc an toàn bản quyền:**
+  - Bắt buộc cam kết mục đích học tập, nghiên cứu cá nhân (`consent_given = True`, `rights_basis = "personal_fair_use"`).
+  - Tự động đưa vào trạng thái **Cách ly (`verification_status = "quarantine"`)** và không công khai (`is_public = False`).
+  - Lưu trữ tệp tin nhị phân an toàn theo phân quyền người dùng tại `data/storage/partial_materials/{user_id}/`, tự động băm SHA-256 để chống giả mạo.
+- **Kênh thao tác:**
+  - Bot Telegram: Lệnh `/uppartial` -> chọn **"💾 Tải lên liên kết / tài liệu số"**.
+  - Web API: `POST /api/v1/me/partial-materials/digital` (hỗ trợ multipart form data tải file) hoặc `POST /api/v1/me/partial-materials/digital/json`.
+
+### 6.3. Quản lý, tra cứu và bảo vệ xóa
+- **Xem danh mục:**
+  - Bot Telegram: Lệnh `/mypartial`.
+  - Web API: `GET /api/v1/me/partial-materials?user_id={user_id}`.
+- **Ràng buộc an toàn khi xóa (Deletion Protection):**
+  - Người dùng có thể xóa tài liệu số hoặc bản photocopy cá nhân.
+  - Tuyệt đối không cho phép xóa bản photocopy nếu bản sách đang trong giao dịch mượn hoặc đã có lịch sử lưu thông (trả về `409 Conflict`), nhằm đảm bảo tính toàn vẹn của sổ cái lưu thông (`Loan`).
+  - Khi xóa tài liệu số, hệ thống tự động dọn dẹp tệp tin vật lý tương ứng trên đĩa máy chủ.
+
+### 6.4. Bảng kiểm duyệt Quản trị viên
+- Quản trị viên truy cập `/admin/partial-materials` để kiểm duyệt cả bản photocopy (`CopyCoverageRange`) và học liệu số trích đoạn theo chương (`ChapterResource`):
+  - Phê duyệt cấp phép chia sẻ (`verify`) hoặc từ chối (`reject`).

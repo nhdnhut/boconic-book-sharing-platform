@@ -1088,10 +1088,12 @@ async def bot_get_book_chapters_and_progress(
 ):
     """Retrieve book chapters combined with actor's personal reading progress."""
     from app.services.chapter_service import ChapterService
+    book = await db.get(Book, book_id)
     chapters = await ChapterService.get_book_chapters(db, book_id=book_id)
     progress_summary = await ChapterService.get_user_progress(db, user_id=actor.id, book_id=book_id)
     return {
         "book_id": book_id,
+        "book_title": book.title if book else "Sách",
         "chapters": chapters,
         "progress_summary": progress_summary,
     }
@@ -1174,6 +1176,154 @@ async def bot_get_user_resources(
     verify_bot_api_key(x_bot_api_key)
     from app.services.user_service import UserService
     return await UserService.get_user_resources_summary_api(db, user_id=user_id)
+
+
+# ==========================================
+# BOT PARTIAL MATERIALS ENDPOINTS
+# ==========================================
+
+class BotDeclarePhysicalPartialDTO(BaseModel):
+    book_id: str
+    start_page: int
+    end_page: int
+    chapters: Optional[List[Any]] = None
+    condition: str = "good"
+    source_description: Optional[str] = None
+    visibility: str = "private"
+    storage_location_private: Optional[str] = None
+    notes: Optional[str] = None
+    barcode: Optional[str] = None
+
+
+class BotUploadDigitalPartialDTO(BaseModel):
+    book_id: str
+    chapter_id: Optional[str] = None
+    title: str = "Tài liệu học tập"
+    resource_type: str = "digital_fragment"
+    url: Optional[str] = None
+    file_bytes_base64: Optional[str] = None
+    filename: Optional[str] = None
+    page_start: Optional[int] = None
+    page_end: Optional[int] = None
+    rights_basis: str = "personal_fair_use"
+    consent_given: bool = True
+    provenance: Optional[str] = None
+
+
+@router.post("/partial-materials/physical")
+async def bot_declare_physical_partial(
+    dto: BotDeclarePhysicalPartialDTO,
+    actor: User = Depends(verify_bot_actor),
+    db: AsyncSession = Depends(get_db),
+):
+    """Declare personal physical photocopy or partial holding via Bot."""
+    from app.services.partial_material_service import PartialMaterialService
+    copy, coverage_range = await PartialMaterialService.create_physical_partial_material(
+        db=db,
+        user_id=actor.id,
+        book_id=dto.book_id,
+        start_page=dto.start_page,
+        end_page=dto.end_page,
+        chapters=dto.chapters,
+        condition=dto.condition,
+        source_description=dto.source_description,
+        visibility=dto.visibility,
+        storage_location_private=dto.storage_location_private,
+        notes=dto.notes,
+        barcode=dto.barcode,
+    )
+    await db.commit()
+    return {
+        "status": "success",
+        "copy_id": copy.id,
+        "public_code": copy.public_code,
+        "range_id": coverage_range.id,
+        "coverage_summary": copy.coverage_summary,
+        "visibility": copy.visibility,
+    }
+
+
+@router.post("/partial-materials/digital")
+async def bot_upload_digital_partial(
+    dto: BotUploadDigitalPartialDTO,
+    actor: User = Depends(verify_bot_actor),
+    db: AsyncSession = Depends(get_db),
+):
+    """Declare personal digital fragment or chapter link / file via Bot."""
+    from app.services.partial_material_service import PartialMaterialService
+    import base64
+
+    file_bytes = None
+    filename = dto.filename
+    if dto.file_bytes_base64:
+        try:
+            file_bytes = base64.b64decode(dto.file_bytes_base64)
+        except Exception:
+            raise BoconicException(ErrorCode.VALIDATION_ERROR, "Tệp dữ liệu base64 không hợp lệ.", status_code=400)
+
+    resource = await PartialMaterialService.create_digital_partial_material(
+        db=db,
+        user_id=actor.id,
+        book_id=dto.book_id,
+        chapter_id=dto.chapter_id or "auto",
+        title=dto.title,
+        resource_type="file" if file_bytes else dto.resource_type,
+        url=dto.url,
+        file_bytes=file_bytes,
+        filename=filename,
+        page_start=dto.page_start,
+        page_end=dto.page_end,
+        rights_basis=dto.rights_basis,
+        consent_given=dto.consent_given,
+        provenance=dto.provenance,
+    )
+    await db.commit()
+    return {
+        "status": "success",
+        "resource_id": resource.id,
+        "title": resource.title,
+        "chapter_id": resource.chapter_id,
+        "book_id": resource.book_id,
+        "verification_status": resource.verification_status,
+        "is_public": resource.is_public,
+        "has_file": bool(resource.file_path),
+    }
+
+
+@router.get("/partial-materials/me")
+async def bot_get_my_partial_materials(
+    actor: User = Depends(verify_bot_actor),
+    db: AsyncSession = Depends(get_db),
+):
+    """Fetch personal partial materials owned by the requesting Telegram user."""
+    from app.services.partial_material_service import PartialMaterialService
+    return await PartialMaterialService.get_user_partial_materials(db=db, user_id=actor.id)
+
+
+@router.delete("/partial-materials/physical/{copy_id}")
+async def bot_delete_my_physical_partial(
+    copy_id: str,
+    actor: User = Depends(verify_bot_actor),
+    db: AsyncSession = Depends(get_db),
+):
+    """Delete personal physical partial copy via Bot."""
+    from app.services.partial_material_service import PartialMaterialService
+    await PartialMaterialService.delete_physical_partial_copy(db=db, user_id=actor.id, copy_id=copy_id)
+    await db.commit()
+    return {"status": "success", "deleted_copy_id": copy_id}
+
+
+@router.delete("/partial-materials/digital/{resource_id}")
+async def bot_delete_my_digital_partial(
+    resource_id: str,
+    actor: User = Depends(verify_bot_actor),
+    db: AsyncSession = Depends(get_db),
+):
+    """Delete personal digital partial resource via Bot."""
+    from app.services.partial_material_service import PartialMaterialService
+    await PartialMaterialService.delete_digital_partial_resource(db=db, user_id=actor.id, resource_id=resource_id)
+    await db.commit()
+    return {"status": "success", "deleted_resource_id": resource_id}
 
 
 

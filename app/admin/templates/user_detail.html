@@ -278,6 +278,80 @@
       <h2 style="font-size: 1.1rem; font-weight: 700; color: #0f172a; margin: 0;">📦 Kho sách cá nhân sở hữu ({{ owned_copies|length }})</h2>
       <p style="font-size: 0.85rem; color: #64748b; margin: 2px 0 0 0;">Danh mục toàn bộ bản sách & tài liệu photocopy 1 phần mà người dùng đã đăng ký.</p>
     </div>
+    <button onclick="document.getElementById('declarePartialModal').style.display='block'" class="btn btn-sm btn-primary" style="display: flex; align-items: center; gap: 6px; padding: 6px 12px; font-size: 0.85rem; font-weight: 600; background: #4f46e5; color: white; border-radius: 6px; border: none; cursor: pointer;">
+      ➕ Khai báo photocopy 1 phần
+    </button>
+  </div>
+
+  <!-- Modal Khai báo photocopy 1 phần -->
+  <div id="declarePartialModal" style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(15,23,42,0.5); z-index: 9999; overflow-y: auto;">
+    <div style="background: white; border-radius: 12px; max-width: 540px; margin: 60px auto; padding: 24px; box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.1);">
+      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
+        <h3 style="margin: 0; font-size: 1.15rem; color: #0f172a;">📑 Khai báo bản photocopy 1 phần cho bạn đọc</h3>
+        <button type="button" onclick="document.getElementById('declarePartialModal').style.display='none'" style="background: none; border: none; font-size: 1.4rem; cursor: pointer; color: #94a3b8;">&times;</button>
+      </div>
+      <p style="font-size: 0.85rem; color: #64748b; margin-top: 0; margin-bottom: 16px;">
+        Khai báo tài liệu theo chính sách bản quyền: Mặc định lưu trữ ở chế độ <strong>Riêng tư (Private)</strong> phục vụ học tập cá nhân.
+      </p>
+
+      <form method="POST" action="/admin/users/{{ user.id }}/partial-copy">
+        <div style="margin-bottom: 14px;">
+          <label style="display: block; font-size: 0.85rem; font-weight: 600; color: #334155; margin-bottom: 4px;">Chọn đầu sách *</label>
+          <select name="book_id" required style="width: 100%; padding: 8px 10px; border: 1px solid #cbd5e1; border-radius: 6px; font-size: 0.85rem;">
+            <option value="">-- Chọn đầu sách --</option>
+            {% for b in books %}
+            <option value="{{ b.id }}">{{ b.title }} ({{ b.isbn or 'Không có ISBN' }})</option>
+            {% endfor %}
+          </select>
+        </div>
+
+        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 14px;">
+          <div>
+            <label style="display: block; font-size: 0.85rem; font-weight: 600; color: #334155; margin-bottom: 4px;">Trang bắt đầu *</label>
+            <input type="number" name="start_page" min="1" placeholder="Ví dụ: 1" required style="width: 100%; padding: 8px 10px; border: 1px solid #cbd5e1; border-radius: 6px; font-size: 0.85rem; box-sizing: border-box;">
+          </div>
+          <div>
+            <label style="display: block; font-size: 0.85rem; font-weight: 600; color: #334155; margin-bottom: 4px;">Trang kết thúc *</label>
+            <input type="number" name="end_page" min="1" placeholder="Ví dụ: 50" required style="width: 100%; padding: 8px 10px; border: 1px solid #cbd5e1; border-radius: 6px; font-size: 0.85rem; box-sizing: border-box;">
+          </div>
+        </div>
+
+        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 14px;">
+          <div>
+            <label style="display: block; font-size: 0.85rem; font-weight: 600; color: #334155; margin-bottom: 4px;">Tình trạng tài liệu</label>
+            <select name="condition" style="width: 100%; padding: 8px 10px; border: 1px solid #cbd5e1; border-radius: 6px; font-size: 0.85rem;">
+              <option value="good" selected>Tốt (Good)</option>
+              <option value="like_new">Rất tốt (Like New)</option>
+              <option value="new">Mới (New)</option>
+              <option value="fair">Khá (Fair)</option>
+            </select>
+          </div>
+          <div>
+            <label style="display: block; font-size: 0.85rem; font-weight: 600; color: #334155; margin-bottom: 4px;">Quyền riêng tư</label>
+            <select name="visibility" style="width: 100%; padding: 8px 10px; border: 1px solid #cbd5e1; border-radius: 6px; font-size: 0.85rem;">
+              <option value="private" selected>🔒 Riêng tư (Private - Chuẩn)</option>
+              <option value="internal">👥 Nội bộ nhóm</option>
+              <option value="public">🌐 Công khai</option>
+            </select>
+          </div>
+        </div>
+
+        <div style="margin-bottom: 14px;">
+          <label style="display: block; font-size: 0.85rem; font-weight: 600; color: #334155; margin-bottom: 4px;">Mô tả nguồn gốc bản photo</label>
+          <input type="text" name="source_description" placeholder="Ví dụ: Bản photo học tập tại thư viện..." style="width: 100%; padding: 8px 10px; border: 1px solid #cbd5e1; border-radius: 6px; font-size: 0.85rem; box-sizing: border-box;">
+        </div>
+
+        <div style="margin-bottom: 18px;">
+          <label style="display: block; font-size: 0.85rem; font-weight: 600; color: #334155; margin-bottom: 4px;">Ghi chú nội bộ</label>
+          <input type="text" name="notes" placeholder="Ghi chú thêm (nếu có)..." style="width: 100%; padding: 8px 10px; border: 1px solid #cbd5e1; border-radius: 6px; font-size: 0.85rem; box-sizing: border-box;">
+        </div>
+
+        <div style="display: flex; justify-content: flex-end; gap: 10px;">
+          <button type="button" onclick="document.getElementById('declarePartialModal').style.display='none'" class="btn" style="padding: 8px 16px; border: 1px solid #cbd5e1; background: white; border-radius: 6px; cursor: pointer;">Đóng</button>
+          <button type="submit" class="btn btn-primary" style="padding: 8px 18px; background: #4f46e5; color: white; border: none; border-radius: 6px; font-weight: 600; cursor: pointer;">Lưu khai báo</button>
+        </div>
+      </form>
+    </div>
   </div>
 
   <div class="table-container" style="overflow-x: auto;">

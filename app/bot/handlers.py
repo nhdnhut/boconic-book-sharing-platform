@@ -25,7 +25,17 @@ from app.bot.keyboards import (
     get_request_action_keyboard,
     get_book_chapters_keyboard,
     get_chapter_detail_keyboard,
+    get_partial_type_keyboard,
+    get_partial_condition_inline_keyboard,
+    get_partial_fair_use_keyboard,
+    get_partial_visibility_keyboard,
+    get_partial_item_actions_keyboard,
+    get_my_partial_management_keyboard,
 )
+import base64
+import os
+import re
+import time
 from app.core.config import settings
 from app.core.logging import logger
 
@@ -69,10 +79,21 @@ class ReportState(StatesGroup):
     waiting_for_category = State()
     waiting_for_description = State()
 
-class PartialCopyState(StatesGroup):
-    waiting_for_book = State()
+class PartialMaterialUploadState(StatesGroup):
+    choosing_type = State()
+    waiting_for_book_query = State()
+    waiting_for_book_selection = State()
+    # Physical branch
     waiting_for_pages = State()
     waiting_for_condition = State()
+    waiting_for_source = State()
+    waiting_for_visibility = State()
+    # Digital branch
+    waiting_for_digital_chapter = State()
+    waiting_for_digital_title = State()
+    waiting_for_digital_url = State()
+    waiting_for_digital_pages = State()
+    waiting_for_fair_use = State()
 
 # --- Common Handlers ---
 @router.message(CommandStart())
@@ -158,6 +179,9 @@ async def start_search(message: Message, state: FSMContext):
 
 @router.message(SearchState.waiting_for_query)
 async def process_search_query(message: Message, state: FSMContext):
+    if not message.text:
+        await message.answer("❌ Vui lòng nhập từ khóa tìm kiếm bằng tin nhắn văn bản:")
+        return
     query = message.text.strip()
     if query == "❌ Hủy thao tác":
         await state.clear()
@@ -221,6 +245,9 @@ async def start_add_book(message: Message, state: FSMContext):
 
 @router.message(AddBookState.waiting_for_book_query)
 async def process_add_book_query(message: Message, state: FSMContext):
+    if not message.text:
+        await message.answer("❌ Vui lòng nhập tên sách hoặc mã ISBN bằng tin nhắn văn bản:")
+        return
     query = message.text.strip()
     if query == "❌ Hủy thao tác":
         await state.clear()
@@ -471,6 +498,9 @@ async def handle_need(message: Message, state: FSMContext):
 
 @router.message(NeedState.waiting_for_title)
 async def process_need_title(message: Message, state: FSMContext):
+    if not message.text:
+        await message.answer("❌ Vui lòng nhập tên sách bạn cần bằng tin nhắn văn bản:")
+        return
     title = message.text.strip()
     if title == "❌ Hủy thao tác":
         await state.clear()
@@ -639,6 +669,9 @@ async def process_report_category(call: CallbackQuery, state: FSMContext):
 
 @router.message(ReportState.waiting_for_description)
 async def process_report_description(message: Message, state: FSMContext, bot: Bot):
+    if not message.text:
+        await message.answer("❌ Vui lòng nhập mô tả sự cố bằng tin nhắn văn bản:")
+        return
     desc = message.text.strip()
     if desc == "❌ Hủy thao tác":
         await state.clear()
@@ -992,7 +1025,7 @@ async def handle_return_cfm_callback(call: CallbackQuery, bot: Bot):
 # PERSONAL LIBRARY HANDLERS
 # ==========================================
 
-@router.message(Command("library"))
+@router.message(Command("mylibrary"))
 @router.message(F.text == "📚 Thư viện của tôi")
 async def handle_library(message: Message, state: FSMContext):
     await state.clear()
@@ -1100,6 +1133,9 @@ async def handle_start_need_wizard(message: Message, state: FSMContext):
 
 @router.message(RequestWizardState.waiting_for_title)
 async def handle_need_title_input(message: Message, state: FSMContext):
+    if not message.text:
+        await message.answer("❌ Vui lòng nhập tên sách bằng tin nhắn văn bản:")
+        return
     title_query = message.text.strip()
     if len(title_query) < 2:
         await message.answer("⚠️ Tiêu đề quá ngắn. Vui lòng nhập rõ hơn tên sách bạn cần:")
@@ -1145,6 +1181,9 @@ async def handle_need_scope_choice(call: CallbackQuery, state: FSMContext):
 
 @router.message(RequestWizardState.waiting_for_scope_detail)
 async def handle_need_scope_detail_input(message: Message, state: FSMContext):
+    if not message.text:
+        await message.answer("❌ Vui lòng nhập chi tiết bằng tin nhắn văn bản:")
+        return
     detail_text = message.text.strip()
     data = await state.get_data()
     scope_type = data.get("scope_type", "full_book")
@@ -1184,6 +1223,9 @@ async def handle_need_urgency_choice(call: CallbackQuery, state: FSMContext):
 
 @router.message(RequestWizardState.waiting_for_location)
 async def handle_need_location_and_submit(message: Message, state: FSMContext):
+    if not message.text:
+        await message.answer("❌ Vui lòng nhập khu vực hoặc gõ `Bỏ qua`:", parse_mode="Markdown")
+        return
     loc_text = message.text.strip()
     coarse_location = None if loc_text.lower() in ("bỏ qua", "skip", "none", "") else loc_text
 
@@ -1230,7 +1272,7 @@ async def handle_need_location_and_submit(message: Message, state: FSMContext):
 # MY NEEDS & OFFERS LIST HANDLERS
 # ==========================================
 
-@router.message(Command("requests"))
+@router.message(Command("myneeds"))
 @router.message(F.text == "📋 Nhu cầu của tôi")
 async def handle_my_needs(message: Message):
     actor_id = message.from_user.id
@@ -1436,6 +1478,19 @@ async def handle_warnings(message: Message):
         await message.answer("✨ Tài khoản của bạn trong sạch, không có cảnh báo nào!", parse_mode="Markdown")
         return
 
+    lines = ["⚠️ **CẢNH BÁO TÀI KHOẢN CỦA BẠN:**\n"]
+    for idx, w in enumerate(warnings, 1):
+        severity_icon = {"low": "🟡", "medium": "🟠", "high": "🔴", "critical": "🚨"}.get(w.get("severity", "low"), "⚠️")
+        status = w.get("status", "pending")
+        reason = w.get("reason", "Không rõ")
+        created = str(w.get("created_at", ""))[:10]
+        ack_text = " ✅ Đã xác nhận" if status == "acknowledged" else ""
+        lines.append(
+            f"{idx}. {severity_icon} **{w.get('warning_type', 'Cảnh báo')}**{ack_text}\n"
+            f"   • Lý do: {reason}\n"
+            f"   • Ngày: {created} | Trạng thái: `{status}`"
+        )
+    lines.append("\n💡 *Gõ /warnings để kiểm tra lại. Liên hệ quản trị viên qua 🚩 Báo cáo / Hỗ trợ nếu bạn muốn khiếu nại.*")
     await message.answer("\n".join(lines), parse_mode="Markdown")
 
 
@@ -1584,12 +1639,13 @@ async def handle_callback_need_chapter(call: CallbackQuery):
             title_query=title,
             book_id=book_id,
             scope_type="chapters",
-            target_chapters=[chapter_id],
+            description=f"Cần tài liệu cho chương: {target.get('title', 'N/A') if target else 'N/A'} (chapter_id: {chapter_id})",
         )
-        nid = res.get("need_id")
+        nid = res.get("need_id", "")
+        nid_display = nid[:8] + "..." if len(nid) > 8 else nid
         await call.message.answer(
             f"📢 **ĐÃ TẠO NHU CẦU CHO CHƯƠNG NÀY!**\n\n"
-            f"Mã nhu cầu: `{nid[:8]}...`\n"
+            f"Mã nhu cầu: `{nid_display}`\n"
             "Hệ thống đang quét các chủ sách có bản sách phù hợp và gửi thông báo hỗ trợ.",
             parse_mode="Markdown",
         )
@@ -1684,7 +1740,779 @@ async def handle_my_resources(message: Message):
 
 @router.message(F.text == "📖 Quản lý theo chương")
 async def handle_chapters_menu_button(message: Message):
-    await handle_chapters_command(message)
+    """Show owned books for chapter management instead of raw command call."""
+    actor_id = message.from_user.id
+    try:
+        copies = await internal_bot_client.get_my_books(actor_id)
+    except Exception as e:
+        await message.answer(f"⚠️ Không thể tải danh sách sách: {parse_http_error(e)}")
+        return
+
+    if not copies:
+        await message.answer(
+            "📖 Bạn chưa có cuốn sách nào trong hệ thống.\n\n"
+            "Hãy bấm **➕ Đăng sách** trước, sau đó quay lại đây để quản lý chương!",
+            reply_markup=get_main_menu_keyboard(is_admin=is_admin(actor_id)),
+            parse_mode="Markdown",
+        )
+        return
+
+    # Build inline keyboard for book selection
+    buttons = []
+    seen_books = set()
+    for c in copies:
+        book_id = c.get("book_id")
+        if book_id and book_id not in seen_books:
+            seen_books.add(book_id)
+            title = c.get("book_title", "Sách")[:35]
+            buttons.append([InlineKeyboardButton(text=f"📚 {title}", callback_data=f"ch_list:{book_id}")])
+        if len(buttons) >= 10:
+            break
+
+    if not buttons:
+        await message.answer(
+            "📖 Không tìm thấy sách phù hợp. Hãy đăng sách trước!",
+            reply_markup=get_main_menu_keyboard(is_admin=is_admin(actor_id)),
+        )
+        return
+
+    kb = InlineKeyboardMarkup(inline_keyboard=buttons)
+    await message.answer(
+        "📖 **QUẢN LÝ THEO CHƯƠNG**\n\n"
+        "Chọn cuốn sách bạn muốn xem danh mục chương và cập nhật tiến độ học:",
+        reply_markup=kb,
+        parse_mode="Markdown",
+    )
+
+
+# ==========================================
+# PARTIAL MATERIALS HANDLERS (TÀI LIỆU TỪNG PHẦN)
+# ==========================================
+
+# ==========================================
+# PARTIAL MATERIALS HANDLERS (TÀI LIỆU TỪNG PHẦN)
+# ==========================================
+
+@router.message(F.text == "📑 Up tài liệu 1 phần")
+@router.message(F.text == "Up tài liệu từng phần")
+@router.message(F.text == "Tải tài liệu từng phần")
+@router.message(Command("uppartial"))
+@router.message(Command("uploadpartial"))
+@router.message(Command("partial"))
+async def handle_up_partial_start(message: Message, state: FSMContext):
+    """Entry point for partial materials upload / photocopy declaration."""
+    await state.clear()
+    await state.set_state(PartialMaterialUploadState.choosing_type)
+    text = (
+        "📑 **ĐĂNG KÝ / TẢI LÊN TÀI LIỆU TỪNG PHẦN (PARTIAL MATERIALS)**\n\n"
+        "Boconic hỗ trợ bạn lưu trữ trích đoạn học tập, bản photocopy cá nhân hoặc tài liệu theo từng chương:\n\n"
+        "• 📕 **Bản photocopy / tài liệu giấy:** Khai báo khoảng trang sở hữu, mặc định lưu trữ *Riêng tư (Private)* vào tài khoản.\n"
+        "• 💾 **Tài liệu số / Liên kết:** Tải file trực tiếp (PDF, Word, Ảnh) hoặc gắn link theo chương, cam kết sử dụng học tập cá nhân và đưa vào chế độ *Cách ly (Quarantine)* an toàn bản quyền.\n\n"
+        "👉 *Vui lòng chọn loại tài liệu bạn muốn thêm:*"
+    )
+    await message.answer(text, reply_markup=get_partial_type_keyboard(), parse_mode="Markdown")
+
+
+@router.callback_query(F.data.startswith("ptp:"))
+async def handle_partial_type_choice(call: CallbackQuery, state: FSMContext):
+    choice = call.data.split(":")[1]
+    actor_id = call.from_user.id
+    if choice == "cancel":
+        await state.clear()
+        try:
+            await call.message.delete()
+        except Exception:
+            pass
+        await call.message.answer("❌ Đã hủy thao tác.", reply_markup=get_main_menu_keyboard(is_admin=is_admin(actor_id)))
+        await call.answer()
+        return
+
+    if choice == "start_new":
+        await state.clear()
+        await state.set_state(PartialMaterialUploadState.choosing_type)
+        text = (
+            "📑 **TẢI LÊN TÀI LIỆU MỚI**\n\n"
+            "👉 *Vui lòng chọn loại tài liệu bạn muốn thêm:*"
+        )
+        await call.message.answer(text, reply_markup=get_partial_type_keyboard(), parse_mode="Markdown")
+        await call.answer()
+        return
+
+    if choice == "refresh_list":
+        try:
+            data = await internal_bot_client.get_my_partial_materials(actor_id)
+            physical = data.get("physical_copies", [])
+            digital = data.get("digital_resources", [])
+            lines = ["📑 **TÀI LIỆU TỪNG PHẦN TRONG TÀI KHOẢN CỦA BẠN**\n"]
+            if physical:
+                lines.append(f"📕 **Bản photocopy / tài liệu giấy ({len(physical)}):**")
+                for idx, p in enumerate(physical, 1):
+                    r_str = ""
+                    if p.get("ranges"):
+                        r = p["ranges"][0]
+                        r_str = f" | Trang {r['start_page']}–{r['end_page']} ({r['pages_count']} trang)"
+                    lines.append(
+                        f"{idx}. 📚 **{p['book_title']}**\n"
+                        f"   • Mã: `{p['public_code']}`{r_str}\n"
+                        f"   • Quyền riêng tư: `{p['visibility']}` | Tình trạng: {p['condition']}"
+                    )
+                lines.append("")
+
+            if digital:
+                lines.append(f"💾 **Tài liệu số & trích đoạn theo chương ({len(digital)}):**")
+                for idx, d in enumerate(digital, 1):
+                    st = "⏳ Cách ly (Quarantine)" if d["verification_status"] == "quarantine" else d["verification_status"]
+                    info_sub = ""
+                    if d.get("has_file") and d.get("filename"):
+                        info_sub = f"\n   • Tệp: 💾 `{d['filename']}`"
+                    elif d.get("url"):
+                        info_sub = f"\n   • Link: {d['url']}"
+                    lines.append(
+                        f"{idx}. 📄 **{d['title']}**\n"
+                        f"   • Sách: {d['book_title']} (Chương {d.get('chapter_number') or 1})\n"
+                        f"   • Trạng thái: **{st}**{info_sub}"
+                    )
+            lines.append("\n💡 *Gõ /uppartial để tải lên tài liệu mới.*")
+            await call.message.edit_text(
+                "\n".join(lines),
+                reply_markup=get_my_partial_management_keyboard(physical, digital),
+                parse_mode="Markdown",
+            )
+            await call.answer("🔄 Đã cập nhật danh sách.")
+        except Exception as e:
+            await call.answer(f"Lỗi làm mới: {parse_http_error(e)}", show_alert=True)
+        return
+
+    await state.update_data(material_type=choice)
+    await state.set_state(PartialMaterialUploadState.waiting_for_book_query)
+
+    type_name = "bản photocopy / tài liệu giấy" if choice == "physical" else "tài liệu số / liên kết chương"
+    prompt = (
+        f"🔍 **Bước 1 — Chọn đầu sách ({type_name}):**\n\n"
+        "Vui lòng nhập tên sách, từ khóa hoặc mã ISBN của cuốn sách mà tài liệu này thuộc về:\n\n"
+        "*(Hoặc bấm /cancel để hủy bỏ)*"
+    )
+    await call.message.edit_text(prompt, parse_mode="Markdown")
+    await call.answer()
+
+
+@router.message(PartialMaterialUploadState.waiting_for_book_query)
+async def handle_partial_book_query(message: Message, state: FSMContext):
+    if not message.text:
+        await message.answer("❌ Vui lòng nhập từ khóa tên sách bằng tin nhắn văn bản, hoặc gõ /cancel để hủy:")
+        return
+
+    q = message.text.strip()
+    if q.startswith("/cancel"):
+        await state.clear()
+        await message.answer("❌ Đã hủy thao tác.", reply_markup=get_main_menu_keyboard(is_admin=is_admin(message.from_user.id)))
+        return
+
+    actor_id = message.from_user.id
+    try:
+        search_res = await internal_bot_client.search_books(actor_id, q, limit=6)
+    except Exception as e:
+        await message.answer(f"Lỗi tìm kiếm: {parse_http_error(e)}")
+        return
+
+    items = search_res.get("items", [])
+    if not items:
+        await message.answer(
+            f"❌ Không tìm thấy sách nào khớp với từ khóa: `{q}`.\n\n"
+            "Vui lòng thử tìm với từ khóa ngắn gọn hơn (Ví dụ: `Giải tích`, `Toán`, `Vật lý`), hoặc gõ /cancel để hủy:",
+            parse_mode="Markdown",
+        )
+        return
+
+    buttons = []
+    for b in items:
+        b_id = b.get("book_id") or b.get("id")
+        title = b.get("title", "Sách")
+        authors = ", ".join(b.get("authors") or []) or "N/A"
+        btn_text = f"📖 {title[:28]}... ({authors[:15]})" if len(title) > 28 else f"📖 {title} ({authors[:15]})"
+        buttons.append([InlineKeyboardButton(text=btn_text, callback_data=f"pselb:{b_id}")])
+    buttons.append([InlineKeyboardButton(text="❌ Hủy bỏ", callback_data="ptp:cancel")])
+
+    kb = InlineKeyboardMarkup(inline_keyboard=buttons)
+    await state.set_state(PartialMaterialUploadState.waiting_for_book_selection)
+    await message.answer("📚 **Chọn đúng cuốn sách bên dưới:**", reply_markup=kb, parse_mode="Markdown")
+
+
+@router.callback_query(F.data.startswith("pselb:"))
+async def handle_partial_book_selected(call: CallbackQuery, state: FSMContext):
+    book_id = call.data.split(":")[1]
+    actor_id = call.from_user.id
+    data = await state.get_data()
+    material_type = data.get("material_type", "physical")
+
+    try:
+        chapters_data = await internal_bot_client.get_book_chapters_and_progress(actor_id, book_id)
+        book_title = chapters_data.get("book_title", "Đầu sách đã chọn")
+    except Exception:
+        chapters_data = {"chapters": []}
+        book_title = "Đầu sách đã chọn"
+
+    await state.update_data(book_id=book_id, book_title=book_title)
+
+    if material_type == "physical":
+        await state.set_state(PartialMaterialUploadState.waiting_for_pages)
+        msg = (
+            f"📚 **Đã chọn:** {book_title}\n\n"
+            "📖 **Bước 2/4 — Khai báo khoảng trang:**\n"
+            "Bạn đang sở hữu bản photocopy từ trang nào đến trang nào?\n\n"
+            "👉 *Nhập theo định dạng `TrangBắtĐầu-TrangKếtThúc` (Ví dụ: `1-50`, `trang 45 đến 120` hoặc `30`):*"
+        )
+        await call.message.edit_text(msg, parse_mode="Markdown")
+        await call.answer()
+    else:
+        chapters = chapters_data.get("chapters", [])
+        buttons = []
+        if chapters:
+            for ch in chapters[:10]:
+                c_id = ch.get("id") or ch.get("chapter_id")
+                c_num = ch.get("chapter_number") or ch.get("chapter_code") or ""
+                c_label = f"Chương {c_num}: {ch.get('title', '')[:25]}"
+                buttons.append([InlineKeyboardButton(text=c_label, callback_data=f"pselc:{c_id}")])
+            buttons.append([InlineKeyboardButton(text="📑 Gắn vào Tài liệu chung (Chương 1)", callback_data="pselc:auto")])
+        else:
+            # When book has no pre-existing chapters, provide instant auto chapter creation!
+            buttons.append([InlineKeyboardButton(text="📑 Tiếp tục với Tài liệu chung / Chương 1", callback_data="pselc:auto")])
+
+        buttons.append([InlineKeyboardButton(text="❌ Hủy bỏ", callback_data="ptp:cancel")])
+        kb = InlineKeyboardMarkup(inline_keyboard=buttons)
+        await state.set_state(PartialMaterialUploadState.waiting_for_digital_chapter)
+        prompt_text = (
+            f"📚 **Đã chọn:** {book_title}\n\n"
+            "📑 **Bước 2/5 — Chọn chương sách gắn tài liệu:**"
+        )
+        if not chapters:
+            prompt_text += "\n\n*(Sách này chưa chia danh mục chương chi tiết. Bạn có thể bấm tiếp tục với Tài liệu chung)*"
+        await call.message.edit_text(prompt_text, reply_markup=kb, parse_mode="Markdown")
+        await call.answer()
+
+
+@router.message(PartialMaterialUploadState.waiting_for_pages)
+async def handle_partial_pages_input(message: Message, state: FSMContext):
+    if not message.text:
+        await message.answer("❌ Vui lòng nhập khoảng trang dạng: `1-50` hoặc `30-80`:", parse_mode="Markdown")
+        return
+
+    text = message.text.strip()
+    if text.startswith("/cancel"):
+        await state.clear()
+        await message.answer("❌ Đã hủy thao tác.", reply_markup=get_main_menu_keyboard(is_admin=is_admin(message.from_user.id)))
+        return
+
+    match = re.search(r"(\d+)\s*(?:-|–|—|đến|to|->)\s*(\d+)", text)
+    if match:
+        start_p, end_p = int(match.group(1)), int(match.group(2))
+    else:
+        single = re.search(r"(\d+)", text)
+        if single:
+            start_p = end_p = int(single.group(1))
+        else:
+            await message.answer(
+                "❌ Định dạng không hợp lệ. Vui lòng nhập khoảng trang dạng: `1-50` hoặc `30-80`:",
+                parse_mode="Markdown",
+            )
+            return
+
+    if start_p < 1 or end_p < start_p:
+        await message.answer(
+            f"❌ Khoảng trang `{start_p}-{end_p}` không hợp lệ. Trang bắt đầu phải >= 1 và <= trang kết thúc.\nVui lòng nhập lại:",
+            parse_mode="Markdown",
+        )
+        return
+
+    await state.update_data(start_page=start_p, end_page=end_p)
+    await state.set_state(PartialMaterialUploadState.waiting_for_condition)
+    await message.answer(
+        f"✅ Khoảng trang: **{start_p}–{end_p}** ({end_p - start_p + 1} trang)\n\n"
+        "🔍 **Bước 3/4 — Chọn tình trạng vật lý của bản photocopy:**",
+        reply_markup=get_partial_condition_inline_keyboard(),
+        parse_mode="Markdown",
+    )
+
+
+@router.callback_query(F.data.startswith("pcond:"))
+async def handle_partial_condition_selected(call: CallbackQuery, state: FSMContext):
+    cond = call.data.split(":")[1]
+    await state.update_data(condition=cond)
+    await state.set_state(PartialMaterialUploadState.waiting_for_source)
+    await call.message.edit_text(
+        "📝 **Bước 4/4 — Nguồn gốc bản photocopy:**\n\n"
+        "Nhập mô tả ngắn gọn về nguồn gốc tài liệu (Ví dụ: `Bản photo lưu hành nội bộ trường`, hoặc gõ /skip để dùng mô tả mặc định):",
+        parse_mode="Markdown",
+    )
+    await call.answer()
+
+
+@router.message(PartialMaterialUploadState.waiting_for_source)
+async def handle_partial_source_input(message: Message, state: FSMContext):
+    source_desc = None
+    if message.text:
+        text = message.text.strip()
+        if text.startswith("/cancel"):
+            await state.clear()
+            await message.answer("❌ Đã hủy thao tác.", reply_markup=get_main_menu_keyboard(is_admin=is_admin(message.from_user.id)))
+            return
+        if not text.startswith("/skip"):
+            source_desc = text
+
+    await state.update_data(source_description=source_desc)
+    await state.set_state(PartialMaterialUploadState.waiting_for_visibility)
+    await message.answer(
+        "🔒 **Bước cuối — Quyền riêng tư của tài liệu:**\n\n"
+        "Theo chính sách Boconic, bản photocopy tài liệu từng phần được khuyến nghị lưu ở chế độ **Riêng tư (Chỉ riêng tôi)** để phục vụ học tập cá nhân.",
+        reply_markup=get_partial_visibility_keyboard(),
+        parse_mode="Markdown",
+    )
+
+
+@router.callback_query(F.data.startswith("pvis:"))
+async def handle_partial_visibility_selected(call: CallbackQuery, state: FSMContext):
+    vis = call.data.split(":")[1]
+    actor_id = call.from_user.id
+    data = await state.get_data()
+    book_id = data["book_id"]
+    book_title = data.get("book_title", "Sách")
+    start_p = data["start_page"]
+    end_p = data["end_page"]
+    cond = data.get("condition", "good")
+    source_desc = data.get("source_description")
+
+    try:
+        res = await internal_bot_client.declare_physical_partial(
+            telegram_user_id=actor_id,
+            book_id=book_id,
+            start_page=start_p,
+            end_page=end_p,
+            condition=cond,
+            source_description=source_desc,
+            visibility=vis,
+        )
+    except Exception as e:
+        await call.message.edit_text(f"❌ Lỗi khai báo: {parse_http_error(e)}")
+        await call.answer()
+        await state.clear()
+        return
+
+    copy_code = res.get("public_code") or res.get("copy_id", "")[:8]
+    pages_count = end_p - start_p + 1
+    vis_label = {"private": "🔒 Riêng tư (Private)", "internal": "👥 Nội bộ", "public": "🌐 Công khai"}.get(vis, vis)
+
+    success_msg = (
+        "🎉 **ĐÃ KHAI BÁO TÀI LIỆU MỘT PHẦN THÀNH CÔNG!**\n\n"
+        f"• Mã bản sách: `{copy_code}`\n"
+        f"• Đầu sách: **{book_title}**\n"
+        f"• Khoảng trang: **Trang {start_p}–{end_p} ({pages_count} trang)**\n"
+        f"• Tình trạng: **{cond}**\n"
+        f"• Quyền riêng tư: **{vis_label}**\n\n"
+        "🔒 Tài liệu đã được lưu trữ an toàn trong tài khoản của bạn. Gõ /mypartial để xem danh sách."
+    )
+    await state.clear()
+    await call.message.edit_text(success_msg, parse_mode="Markdown")
+    await call.message.answer(
+        "Bạn có thể tiếp tục sử dụng các tính năng khác từ menu:",
+        reply_markup=get_main_menu_keyboard(is_admin=is_admin(actor_id)),
+    )
+    await call.answer()
+
+
+# Digital branch handlers
+@router.callback_query(F.data.startswith("pselc:"))
+async def handle_partial_digital_chapter_selected(call: CallbackQuery, state: FSMContext):
+    chapter_id = call.data.split(":")[1]
+    await state.update_data(chapter_id=chapter_id)
+    await state.set_state(PartialMaterialUploadState.waiting_for_digital_title)
+    prompt = (
+        "📝 **Bước 3/5 — Tiêu đề hoặc Tệp tài liệu:**\n\n"
+        "• **Gửi ngay tệp tài liệu** (PDF, Word, Ảnh scan) trực tiếp vào đây.\n"
+        "• **HOẶC nhập tiêu đề tài liệu** (Ví dụ: `Slide tóm tắt Chương 1`, `Đề cương & bài giải`).\n\n"
+        "*(Hoặc bấm /cancel để hủy bỏ)*"
+    )
+    await call.message.edit_text(prompt, parse_mode="Markdown")
+    await call.answer()
+
+
+@router.message(PartialMaterialUploadState.waiting_for_digital_title)
+async def handle_partial_digital_title_input(message: Message, state: FSMContext):
+    # Check if user sent a file directly at this step
+    if message.document:
+        doc = message.document
+        max_bytes = settings.UPLOAD_MAX_MB * 1024 * 1024
+        if doc.file_size and doc.file_size > max_bytes:
+            await message.answer(f"⚠️ Dung lượng tệp quá lớn ({doc.file_size / (1024*1024):.1f}MB). Giới hạn tối đa là {settings.UPLOAD_MAX_MB}MB.")
+            return
+
+        try:
+            file_info = await message.bot.get_file(doc.file_id)
+            file_io = await message.bot.download_file(file_info.file_path)
+            file_bytes = file_io.getvalue()
+            b64_str = base64.b64encode(file_bytes).decode("utf-8")
+            clean_name = doc.file_name or "tai_lieu.pdf"
+            title = os.path.splitext(clean_name)[0]
+            await state.update_data(
+                digital_title=title,
+                file_base64=b64_str,
+                filename=clean_name,
+                resource_type="file",
+            )
+            await state.set_state(PartialMaterialUploadState.waiting_for_digital_pages)
+            await message.answer(
+                f"✅ Đã nhận tệp: **{clean_name}** ({len(file_bytes) / 1024:.1f} KB)\n\n"
+                "📄 **Bước 5/5 — Khoảng trang liên quan:**\n\n"
+                "Nhập khoảng trang của tài liệu này (Ví dụ: `15-30` hoặc gõ /skip nếu bao gồm toàn chương):",
+                parse_mode="Markdown",
+            )
+            return
+        except Exception as e:
+            await message.answer(f"⚠️ Lỗi khi tải tệp từ Telegram: {e}. Vui lòng thử lại hoặc nhập tiêu đề dạng chữ:")
+            return
+
+    if message.photo:
+        photo = message.photo[-1]
+        try:
+            file_info = await message.bot.get_file(photo.file_id)
+            file_io = await message.bot.download_file(file_info.file_path)
+            file_bytes = file_io.getvalue()
+            b64_str = base64.b64encode(file_bytes).decode("utf-8")
+            clean_name = f"photo_{int(time.time())}.jpg"
+            title = "Ảnh chụp tài liệu học tập"
+            await state.update_data(
+                digital_title=title,
+                file_base64=b64_str,
+                filename=clean_name,
+                resource_type="file",
+            )
+            await state.set_state(PartialMaterialUploadState.waiting_for_digital_pages)
+            await message.answer(
+                f"✅ Đã nhận ảnh tài liệu ({len(file_bytes) / 1024:.1f} KB)\n\n"
+                "📄 **Bước 5/5 — Khoảng trang liên quan:**\n\n"
+                "Nhập khoảng trang (Ví dụ: `1-5` hoặc gõ /skip):",
+                parse_mode="Markdown",
+            )
+            return
+        except Exception as e:
+            await message.answer(f"⚠️ Lỗi xử lý ảnh: {e}. Vui lòng thử lại:")
+            return
+
+    if not message.text:
+        await message.answer("❌ Vui lòng nhập tiêu đề bằng chữ hoặc gửi tệp tài liệu:")
+        return
+
+    title = message.text.strip()
+    if title.startswith("/cancel"):
+        await state.clear()
+        await message.answer("❌ Đã hủy thao tác.", reply_markup=get_main_menu_keyboard(is_admin=is_admin(message.from_user.id)))
+        return
+
+    await state.update_data(digital_title=title)
+    await state.set_state(PartialMaterialUploadState.waiting_for_digital_url)
+    await message.answer(
+        "📎 **Bước 4/5 — Tệp đính kèm hoặc Liên kết (URL):**\n\n"
+        "• **Gửi tệp tài liệu** (PDF, Word, Ảnh) trực tiếp tại đây.\n"
+        "• **HOẶC nhập link liên kết** (Google Drive, Dropbox, OneDrive...). \n"
+        "• *(Hoặc gõ /skip để bỏ qua nếu chỉ lưu ghi chú)*:",
+        parse_mode="Markdown",
+    )
+
+
+@router.message(PartialMaterialUploadState.waiting_for_digital_url)
+async def handle_partial_digital_url_input(message: Message, state: FSMContext):
+    # Check for document upload
+    if message.document:
+        doc = message.document
+        max_bytes = settings.UPLOAD_MAX_MB * 1024 * 1024
+        if doc.file_size and doc.file_size > max_bytes:
+            await message.answer(f"⚠️ Dung lượng tệp quá lớn ({doc.file_size / (1024*1024):.1f}MB). Giới hạn tối đa là {settings.UPLOAD_MAX_MB}MB.")
+            return
+
+        try:
+            file_info = await message.bot.get_file(doc.file_id)
+            file_io = await message.bot.download_file(file_info.file_path)
+            file_bytes = file_io.getvalue()
+            b64_str = base64.b64encode(file_bytes).decode("utf-8")
+            clean_name = doc.file_name or "tai_lieu.pdf"
+            await state.update_data(
+                file_base64=b64_str,
+                filename=clean_name,
+                resource_type="file",
+            )
+            await state.set_state(PartialMaterialUploadState.waiting_for_digital_pages)
+            await message.answer(
+                f"✅ Đã nhận tệp: **{clean_name}** ({len(file_bytes) / 1024:.1f} KB)\n\n"
+                "📄 **Bước 5/5 — Khoảng trang liên quan:**\n\n"
+                "Nhập khoảng trang của trích đoạn này (Ví dụ: `15-30` hoặc gõ /skip nếu bao gồm toàn chương):",
+                parse_mode="Markdown",
+            )
+            return
+        except Exception as e:
+            await message.answer(f"⚠️ Lỗi tải tệp: {e}. Vui lòng thử lại hoặc gõ /skip:")
+            return
+
+    # Check for photo upload
+    if message.photo:
+        photo = message.photo[-1]
+        try:
+            file_info = await message.bot.get_file(photo.file_id)
+            file_io = await message.bot.download_file(file_info.file_path)
+            file_bytes = file_io.getvalue()
+            b64_str = base64.b64encode(file_bytes).decode("utf-8")
+            clean_name = f"photo_{int(time.time())}.jpg"
+            await state.update_data(
+                file_base64=b64_str,
+                filename=clean_name,
+                resource_type="file",
+            )
+            await state.set_state(PartialMaterialUploadState.waiting_for_digital_pages)
+            await message.answer(
+                f"✅ Đã nhận ảnh tài liệu ({len(file_bytes) / 1024:.1f} KB)\n\n"
+                "📄 **Bước 5/5 — Khoảng trang liên quan:**\n\n"
+                "Nhập khoảng trang (Ví dụ: `1-5` hoặc gõ /skip):",
+                parse_mode="Markdown",
+            )
+            return
+        except Exception as e:
+            await message.answer(f"⚠️ Lỗi xử lý ảnh: {e}. Vui lòng thử lại:")
+            return
+
+    if not message.text:
+        await message.answer("❌ Vui lòng gửi tệp tài liệu, nhập đường dẫn URL hoặc gõ /skip:")
+        return
+
+    text = message.text.strip()
+    if text.startswith("/cancel"):
+        await state.clear()
+        await message.answer("❌ Đã hủy thao tác.", reply_markup=get_main_menu_keyboard(is_admin=is_admin(message.from_user.id)))
+        return
+
+    url = None if text.startswith("/skip") else text
+    await state.update_data(digital_url=url)
+    await state.set_state(PartialMaterialUploadState.waiting_for_digital_pages)
+    await message.answer(
+        "📄 **Bước 5/5 — Khoảng trang liên quan:**\n\n"
+        "Nhập khoảng trang của trích đoạn này (Ví dụ: `15-30` hoặc gõ /skip nếu bao gồm toàn chương):",
+        parse_mode="Markdown",
+    )
+
+
+@router.message(PartialMaterialUploadState.waiting_for_digital_pages)
+async def handle_partial_digital_pages_input(message: Message, state: FSMContext):
+    p_start, p_end = None, None
+    if message.text:
+        text = message.text.strip()
+        if text.startswith("/cancel"):
+            await state.clear()
+            await message.answer("❌ Đã hủy thao tác.", reply_markup=get_main_menu_keyboard(is_admin=is_admin(message.from_user.id)))
+            return
+
+        if not text.startswith("/skip"):
+            match = re.search(r"(\d+)\s*(?:-|–|—|đến|to|->)\s*(\d+)", text)
+            if match:
+                p_start, p_end = int(match.group(1)), int(match.group(2))
+            else:
+                single = re.search(r"(\d+)", text)
+                if single:
+                    p_start = p_end = int(single.group(1))
+
+    await state.update_data(page_start=p_start, page_end=p_end)
+    await state.set_state(PartialMaterialUploadState.waiting_for_fair_use)
+
+    pledge_text = (
+        "⚖️ **CAM KẾT BẢN QUYỀN & MỤC ĐÍCH HỌC TẬP (FAIR USE)**\n\n"
+        "Theo chính sách kiểm soát tài liệu từng phần của Boconic:\n"
+        "1. Bạn cam đoan tài liệu trích đoạn này chỉ phục vụ mục đích học tập, nghiên cứu cá nhân.\n"
+        "2. Tài liệu sẽ được bảo vệ trong trạng thái **Cách ly (Quarantine)** để đảm bảo an toàn bản quyền trước khi lưu hành.\n\n"
+        "👉 *Vui lòng bấm nút bên dưới để xác nhận cam kết:*"
+    )
+    await message.answer(pledge_text, reply_markup=get_partial_fair_use_keyboard(), parse_mode="Markdown")
+
+
+@router.callback_query(F.data.startswith("pfu:"))
+async def handle_partial_fair_use_choice(call: CallbackQuery, state: FSMContext):
+    choice = call.data.split(":")[1]
+    if choice != "accept":
+        await state.clear()
+        await call.message.edit_text("❌ Đã hủy lưu tài liệu vì chưa đồng ý cam kết bản quyền.")
+        await call.answer()
+        return
+
+    actor_id = call.from_user.id
+    data = await state.get_data()
+    book_id = data["book_id"]
+    book_title = data.get("book_title", "Sách")
+    chapter_id = data.get("chapter_id") or "auto"
+    title = data.get("digital_title") or "Tài liệu học tập"
+    url = data.get("digital_url")
+    file_b64 = data.get("file_base64")
+    filename = data.get("filename")
+    page_start = data.get("page_start")
+    page_end = data.get("page_end")
+
+    try:
+        await internal_bot_client.upload_digital_partial(
+            telegram_user_id=actor_id,
+            book_id=book_id,
+            chapter_id=chapter_id,
+            title=title,
+            url=url,
+            file_bytes_base64=file_b64,
+            filename=filename,
+            page_start=page_start,
+            page_end=page_end,
+            rights_basis="personal_fair_use",
+            consent_given=True,
+        )
+    except Exception as e:
+        await call.message.edit_text(f"❌ Lỗi lưu tài liệu số: {parse_http_error(e)}")
+        await call.answer()
+        await state.clear()
+        return
+
+    page_info = f"Trang {page_start}–{page_end}" if page_start and page_end else "Toàn chương / Tổng hợp"
+    file_info = f"💾 Tệp: `{filename}`" if filename else (f"🔗 Link: {url}" if url else "📝 Ghi chú số")
+
+    success_msg = (
+        "🎉 **ĐÃ LƯU TRÍCH ĐOẠN SỐ THÀNH CÔNG!**\n\n"
+        f"• Tiêu đề: **{title}**\n"
+        f"• Sách: **{book_title}**\n"
+        f"• Nội dung đính kèm: {file_info}\n"
+        f"• Khoảng trang: **{page_info}**\n"
+        f"• Trạng thái: **⏳ Cách ly chờ duyệt (Quarantine - An toàn bản quyền)**\n\n"
+        "🔒 Tài liệu đã được lưu trữ an toàn trong tài khoản của bạn. Gõ /mypartial để xem lại và quản lý."
+    )
+    await state.clear()
+    await call.message.edit_text(success_msg, parse_mode="Markdown")
+    await call.message.answer(
+        "Bạn có thể tiếp tục sử dụng các tính năng khác từ menu:",
+        reply_markup=get_main_menu_keyboard(is_admin=is_admin(actor_id)),
+    )
+    await call.answer()
+
+
+@router.message(Command("mypartial"))
+async def handle_my_partial_command(message: Message):
+    """View personal partial materials."""
+    actor_id = message.from_user.id
+    try:
+        data = await internal_bot_client.get_my_partial_materials(actor_id)
+    except Exception as e:
+        await message.answer(f"Lỗi tải danh mục: {parse_http_error(e)}")
+        return
+
+    physical = data.get("physical_copies", [])
+    digital = data.get("digital_resources", [])
+
+    if not physical and not digital:
+        await message.answer(
+            "📭 Bạn chưa có tài liệu một phần nào trong tài khoản.\n\n"
+            "Bấm **📑 Up tài liệu 1 phần** hoặc gõ /uppartial để thêm bản photocopy hoặc trích đoạn số!",
+            reply_markup=get_main_menu_keyboard(is_admin=is_admin(actor_id)),
+        )
+        return
+
+    lines = ["📑 **TÀI LIỆU TỪNG PHẦN TRONG TÀI KHOẢN CỦA BẠN**\n"]
+    if physical:
+        lines.append(f"📕 **Bản photocopy / tài liệu giấy ({len(physical)}):**")
+        for idx, p in enumerate(physical, 1):
+            r_str = ""
+            if p.get("ranges"):
+                r = p["ranges"][0]
+                r_str = f" | Trang {r['start_page']}–{r['end_page']} ({r['pages_count']} trang)"
+            lines.append(
+                f"{idx}. 📚 **{p['book_title']}**\n"
+                f"   • Mã: `{p['public_code']}`{r_str}\n"
+                f"   • Quyền riêng tư: `{p['visibility']}` | Tình trạng: {p['condition']}"
+            )
+        lines.append("")
+
+    if digital:
+        lines.append(f"💾 **Tài liệu số & trích đoạn theo chương ({len(digital)}):**")
+        for idx, d in enumerate(digital, 1):
+            st = "⏳ Cách ly (Quarantine)" if d["verification_status"] == "quarantine" else d["verification_status"]
+            info_sub = ""
+            if d.get("has_file") and d.get("filename"):
+                info_sub = f"\n   • Tệp: 💾 `{d['filename']}`"
+            elif d.get("url"):
+                info_sub = f"\n   • Link: {d['url']}"
+            lines.append(
+                f"{idx}. 📄 **{d['title']}**\n"
+                f"   • Sách: {d['book_title']} (Chương {d.get('chapter_number') or 1})\n"
+                f"   • Trạng thái: **{st}**{info_sub}"
+            )
+
+    lines.append("\n💡 *Dùng các nút bên dưới để xóa hoặc thêm mới tài liệu.*")
+    await message.answer(
+        "\n".join(lines),
+        reply_markup=get_my_partial_management_keyboard(physical, digital),
+        parse_mode="Markdown",
+    )
+
+
+@router.callback_query(F.data.startswith("dpart:"))
+async def handle_delete_partial_item(call: CallbackQuery):
+    actor_id = call.from_user.id
+    parts = call.data.split(":")
+    item_type, item_id = parts[1], parts[2]
+    try:
+        if item_type == "physical":
+            await internal_bot_client.delete_my_physical_partial(actor_id, item_id)
+        else:
+            await internal_bot_client.delete_my_digital_partial(actor_id, item_id)
+        await call.answer("✅ Đã xóa tài liệu khỏi tài khoản của bạn.", show_alert=True)
+
+        # Refresh list in place
+        try:
+            data = await internal_bot_client.get_my_partial_materials(actor_id)
+            physical = data.get("physical_copies", [])
+            digital = data.get("digital_resources", [])
+            if not physical and not digital:
+                await call.message.edit_text(
+                    "📭 Bạn chưa có tài liệu một phần nào trong tài khoản.\n\n"
+                    "Bấm **📑 Up tài liệu 1 phần** hoặc gõ /uppartial để thêm bản photocopy hoặc trích đoạn số!"
+                )
+            else:
+                lines = ["📑 **TÀI LIỆU TỪNG PHẦN TRONG TÀI KHOẢN CỦA BẠN**\n"]
+                if physical:
+                    lines.append(f"📕 **Bản photocopy / tài liệu giấy ({len(physical)}):**")
+                    for idx, p in enumerate(physical, 1):
+                        r_str = ""
+                        if p.get("ranges"):
+                            r = p["ranges"][0]
+                            r_str = f" | Trang {r['start_page']}–{r['end_page']} ({r['pages_count']} trang)"
+                        lines.append(
+                            f"{idx}. 📚 **{p['book_title']}**\n"
+                            f"   • Mã: `{p['public_code']}`{r_str}\n"
+                            f"   • Quyền riêng tư: `{p['visibility']}` | Tình trạng: {p['condition']}"
+                        )
+                    lines.append("")
+
+                if digital:
+                    lines.append(f"💾 **Tài liệu số & trích đoạn theo chương ({len(digital)}):**")
+                    for idx, d in enumerate(digital, 1):
+                        st = "⏳ Cách ly (Quarantine)" if d["verification_status"] == "quarantine" else d["verification_status"]
+                        info_sub = ""
+                        if d.get("has_file") and d.get("filename"):
+                            info_sub = f"\n   • Tệp: 💾 `{d['filename']}`"
+                        elif d.get("url"):
+                            info_sub = f"\n   • Link: {d['url']}"
+                        lines.append(
+                            f"{idx}. 📄 **{d['title']}**\n"
+                            f"   • Sách: {d['book_title']} (Chương {d.get('chapter_number') or 1})\n"
+                            f"   • Trạng thái: **{st}**{info_sub}"
+                        )
+                lines.append("\n💡 *Dùng các nút bên dưới để xóa hoặc thêm mới tài liệu.*")
+                await call.message.edit_text(
+                    "\n".join(lines),
+                    reply_markup=get_my_partial_management_keyboard(physical, digital),
+                    parse_mode="Markdown",
+                )
+        except Exception:
+            pass
+    except Exception as e:
+        await call.answer(f"Lỗi khi xóa: {parse_http_error(e)}", show_alert=True)
+
 
 
 

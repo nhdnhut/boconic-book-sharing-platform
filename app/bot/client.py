@@ -451,6 +451,95 @@ class BoconicInternalClient:
             res.raise_for_status()
             return res.json()
 
+    async def declare_physical_partial(
+        self,
+        telegram_user_id: int,
+        book_id: str,
+        start_page: int,
+        end_page: int,
+        chapters: Optional[List[Any]] = None,
+        condition: str = "good",
+        source_description: Optional[str] = None,
+        visibility: str = "private",
+        storage_location_private: Optional[str] = None,
+        notes: Optional[str] = None,
+        barcode: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        url = f"{self.base_url}/api/v1/internal/telegram/partial-materials/physical"
+        payload = {
+            "book_id": book_id,
+            "start_page": start_page,
+            "end_page": end_page,
+            "chapters": chapters or [],
+            "condition": condition,
+            "source_description": source_description,
+            "visibility": visibility,
+            "storage_location_private": storage_location_private,
+            "notes": notes,
+            "barcode": barcode,
+        }
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            res = await client.post(url, json=payload, headers=self._headers(telegram_user_id))
+            res.raise_for_status()
+            return res.json()
+
+    async def upload_digital_partial(
+        self,
+        telegram_user_id: int,
+        book_id: str,
+        chapter_id: Optional[str] = None,
+        title: str = "Tài liệu học tập",
+        resource_type: str = "digital_fragment",
+        url: Optional[str] = None,
+        file_bytes_base64: Optional[str] = None,
+        filename: Optional[str] = None,
+        page_start: Optional[int] = None,
+        page_end: Optional[int] = None,
+        rights_basis: str = "personal_fair_use",
+        consent_given: bool = True,
+        provenance: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        api_url = f"{self.base_url}/api/v1/internal/telegram/partial-materials/digital"
+        payload = {
+            "book_id": book_id,
+            "chapter_id": chapter_id or "auto",
+            "title": title,
+            "resource_type": resource_type,
+            "url": url,
+            "file_bytes_base64": file_bytes_base64,
+            "filename": filename,
+            "page_start": page_start,
+            "page_end": page_end,
+            "rights_basis": rights_basis,
+            "consent_given": consent_given,
+            "provenance": provenance,
+        }
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            res = await client.post(api_url, json=payload, headers=self._headers(telegram_user_id))
+            res.raise_for_status()
+            return res.json()
+
+    async def get_my_partial_materials(self, telegram_user_id: int) -> Dict[str, Any]:
+        url = f"{self.base_url}/api/v1/internal/telegram/partial-materials/me"
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            res = await client.get(url, headers=self._headers(telegram_user_id))
+            res.raise_for_status()
+            return res.json()
+
+    async def delete_my_physical_partial(self, telegram_user_id: int, copy_id: str) -> Dict[str, Any]:
+        url = f"{self.base_url}/api/v1/internal/telegram/partial-materials/physical/{copy_id}"
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            res = await client.delete(url, headers=self._headers(telegram_user_id))
+            res.raise_for_status()
+            return res.json()
+
+    async def delete_my_digital_partial(self, telegram_user_id: int, resource_id: str) -> Dict[str, Any]:
+        url = f"{self.base_url}/api/v1/internal/telegram/partial-materials/digital/{resource_id}"
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            res = await client.delete(url, headers=self._headers(telegram_user_id))
+            res.raise_for_status()
+            return res.json()
+
 
 internal_bot_client = BoconicInternalClient()
 

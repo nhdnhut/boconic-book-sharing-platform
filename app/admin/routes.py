@@ -11,7 +11,7 @@ from sqlalchemy.orm import selectinload
 
 from app.core.config import settings
 from app.core.security import generate_session_token, generate_csrf_token, verify_password
-from app.db.models.catalog import Author, Book, BookAuthor, BookCopy, CopyCoverageRange, Chapter, ChapterProposal
+from app.db.models.catalog import Author, Book, BookAuthor, BookCopy, CopyCoverageRange, Chapter, ChapterProposal, ChapterResource
 from app.db.models.community import (
     AuthorizedCollection,
     CommunityRequest,
@@ -637,12 +637,23 @@ async def admin_partial_materials_page(
     res = await db.execute(stmt)
     partial_items = res.all()
 
+    digital_stmt = (
+        select(ChapterResource, Chapter, Book, User.public_alias)
+        .join(Chapter, ChapterResource.chapter_id == Chapter.id)
+        .join(Book, ChapterResource.book_id == Book.id)
+        .join(User, ChapterResource.owner_id == User.id)
+        .order_by(desc(ChapterResource.created_at))
+    )
+    digital_res = await db.execute(digital_stmt)
+    digital_items = digital_res.all()
+
     return templates.TemplateResponse(
         request,
         "partial_materials.html",
         {
             "admin": admin,
             "partial_items": partial_items,
+            "digital_items": digital_items,
             "active_nav": "partial_materials",
         },
     )
@@ -680,6 +691,61 @@ async def admin_reject_partial_material(
         r_item.verification_status = "rejected"
         await db.commit()
     return RedirectResponse(url="/admin/partial-materials", status_code=303)
+
+
+@router.post("/partial-materials/digital/{resource_id}/verify", response_class=HTMLResponse)
+async def admin_verify_digital_resource(
+    resource_id: str,
+    boconic_session: Optional[str] = Cookie(None),
+    db: AsyncSession = Depends(get_db),
+):
+    admin = await get_optional_admin(boconic_session, db)
+    if not admin:
+        return RedirectResponse(url="/admin/login", status_code=303)
+
+    resource = await db.get(ChapterResource, resource_id)
+    if resource:
+        resource.verification_status = "verified"
+        resource.is_public = True
+        await db.commit()
+    return RedirectResponse(url="/admin/partial-materials", status_code=303)
+
+
+@router.post("/partial-materials/digital/{resource_id}/reject", response_class=HTMLResponse)
+async def admin_reject_digital_resource(
+    resource_id: str,
+    boconic_session: Optional[str] = Cookie(None),
+    db: AsyncSession = Depends(get_db),
+):
+    admin = await get_optional_admin(boconic_session, db)
+    if not admin:
+        return RedirectResponse(url="/admin/login", status_code=303)
+
+    resource = await db.get(ChapterResource, resource_id)
+    if resource:
+        resource.verification_status = "rejected"
+        resource.is_public = False
+        await db.commit()
+    return RedirectResponse(url="/admin/partial-materials", status_code=303)
+
+
+@router.get("/partial-materials/digital/{resource_id}/file")
+async def admin_download_digital_resource_file(
+    resource_id: str,
+    boconic_session: Optional[str] = Cookie(None),
+    db: AsyncSession = Depends(get_db),
+):
+    """Admin inspection download for uploaded partial material files."""
+    admin = await get_optional_admin(boconic_session, db)
+    if not admin:
+        return RedirectResponse(url="/admin/login", status_code=303)
+
+    from fastapi.responses import FileResponse
+    from app.services.partial_material_service import PartialMaterialService
+    file_path, filename = await PartialMaterialService.get_digital_partial_file(
+        db=db, user_id=admin.id, resource_id=resource_id, is_admin=True
+    )
+    return FileResponse(path=file_path, filename=filename, media_type="application/octet-stream")
 
 
 # ==========================================
@@ -1063,6 +1129,7 @@ async def admin_user_detail_page(
         return RedirectResponse(url="/admin/login", status_code=303)
 
     details = await UserService.get_user_resource_details(db, user_id=user_id)
+    books = (await db.execute(select(Book).order_by(Book.title))).scalars().all()
 
     return templates.TemplateResponse(
         request,
@@ -1081,11 +1148,56 @@ async def admin_user_detail_page(
             "open_needs": details["open_needs"],
             "open_offers": details["open_offers"],
             "study_progress": details["study_progress"],
+            "books": books,
             "message": message,
             "error": error,
             "active_nav": "users",
         },
     )
+
+
+@router.post("/users/{user_id}/partial-copy", response_class=HTMLResponse)
+async def admin_declare_user_partial_copy(
+    user_id: str,
+    book_id: str = Form(...),
+    start_page: int = Form(...),
+    end_page: int = Form(...),
+    condition: str = Form("good"),
+    source_description: Optional[str] = Form(None),
+    visibility: str = Form("private"),
+    notes: Optional[str] = Form(None),
+    boconic_session: Optional[str] = Cookie(None),
+    db: AsyncSession = Depends(get_db),
+):
+    """Desk librarian action: declare a physical photocopy or excerpt holding on behalf of user."""
+    admin = await get_optional_admin(boconic_session, db)
+    if not admin:
+        return RedirectResponse(url="/admin/login", status_code=303)
+
+    try:
+        from app.services.partial_material_service import PartialMaterialService
+        await PartialMaterialService.create_physical_partial_material(
+            db=db,
+            user_id=user_id,
+            book_id=book_id,
+            start_page=start_page,
+            end_page=end_page,
+            condition=condition,
+            source_description=source_description,
+            visibility=visibility,
+            notes=notes,
+        )
+        await db.commit()
+        return RedirectResponse(
+            url=f"/admin/users/{user_id}?message=Đã+khai+báo+tài+liệu+photocopy+1+phần+thành+công",
+            status_code=303,
+        )
+    except Exception as e:
+        await db.rollback()
+        return RedirectResponse(
+            url=f"/admin/users/{user_id}?error={str(e)}",
+            status_code=303,
+        )
 
 
 @router.post("/users/{user_id}/status", response_class=HTMLResponse)

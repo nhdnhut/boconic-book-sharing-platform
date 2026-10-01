@@ -59,6 +59,12 @@ class Book(Base):
     def isbn(self) -> str:
         return self.isbn13 or self.isbn10 or ""
 
+    @property
+    def total_pages(self) -> Optional[int]:
+        if self.custom_data and isinstance(self.custom_data, dict):
+            return self.custom_data.get("total_pages")
+        return None
+
 class Author(Base):
     __tablename__ = "authors"
 
