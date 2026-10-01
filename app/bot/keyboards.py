@@ -10,6 +10,7 @@ def get_main_menu_keyboard(is_admin: bool = False) -> ReplyKeyboardMarkup:
     """Main persistent reply keyboard grid."""
     keyboard = [
         [KeyboardButton(text="🔎 Tìm sách"), KeyboardButton(text="📚 Thư viện của tôi")],
+        [KeyboardButton(text="🎒 Tài nguyên đang dùng"), KeyboardButton(text="📖 Quản lý theo chương")],
         [KeyboardButton(text="📢 Yêu cầu sách"), KeyboardButton(text="📋 Nhu cầu của tôi")],
         [KeyboardButton(text="➕ Đăng sách"), KeyboardButton(text="📋 Yêu cầu mượn")],
         [KeyboardButton(text="🤝 Đang mượn"), KeyboardButton(text="📤 Đang cho mượn")],

@@ -33,6 +33,7 @@ from app.services.chapter_service import ChapterService
 from app.services.coverage_service import CoverageService
 from app.services.import_export import ImportExportService
 from app.services.need_service import NeedService
+from app.services.user_service import UserService
 from app.services.warning_service import WarningService
 
 TEMPLATES_DIR = Path(__file__).resolve().parent / "templates"
@@ -1003,6 +1004,190 @@ async def resolve_need_revalidation(
         await db.commit()
 
     return RedirectResponse(url="/admin/process-audit", status_code=303)
+
+
+# ==========================================
+# USER MANAGEMENT & RESOURCE TRACKING ADMIN
+# ==========================================
+
+@router.get("/users", response_class=HTMLResponse)
+async def admin_users_page(
+    request: Request,
+    search: Optional[str] = Query(None),
+    status: Optional[str] = Query("all"),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+    boconic_session: Optional[str] = Cookie(None),
+    db: AsyncSession = Depends(get_db),
+):
+    admin = await get_optional_admin(boconic_session, db)
+    if not admin:
+        return RedirectResponse(url="/admin/login", status_code=303)
+
+    data = await UserService.list_users(
+        db=db,
+        search=search,
+        status=status,
+        page=page,
+        page_size=page_size,
+    )
+
+    return templates.TemplateResponse(
+        request,
+        "users.html",
+        {
+            "admin": admin,
+            "users_data": data["users"],
+            "total_count": data["total_count"],
+            "current_page": data["page"],
+            "total_pages": data["total_pages"],
+            "search_query": search or "",
+            "status_filter": status or "all",
+            "stats": data["stats"],
+            "active_nav": "users",
+        },
+    )
+
+
+@router.get("/users/{user_id}", response_class=HTMLResponse)
+async def admin_user_detail_page(
+    request: Request,
+    user_id: str,
+    message: Optional[str] = Query(None),
+    error: Optional[str] = Query(None),
+    boconic_session: Optional[str] = Cookie(None),
+    db: AsyncSession = Depends(get_db),
+):
+    admin = await get_optional_admin(boconic_session, db)
+    if not admin:
+        return RedirectResponse(url="/admin/login", status_code=303)
+
+    details = await UserService.get_user_resource_details(db, user_id=user_id)
+
+    return templates.TemplateResponse(
+        request,
+        "user_detail.html",
+        {
+            "admin": admin,
+            "user": details["user"],
+            "locations": details["locations"],
+            "settings": details["settings"],
+            "trust_profile": details["trust_profile"],
+            "warnings": details["warnings"],
+            "borrowed_loans": details["borrowed_loans"],
+            "lent_loans": details["lent_loans"],
+            "owned_copies": details["owned_copies"],
+            "chapter_resources": details["chapter_resources"],
+            "open_needs": details["open_needs"],
+            "open_offers": details["open_offers"],
+            "study_progress": details["study_progress"],
+            "message": message,
+            "error": error,
+            "active_nav": "users",
+        },
+    )
+
+
+@router.post("/users/{user_id}/status", response_class=HTMLResponse)
+async def admin_update_user_status_form(
+    user_id: str,
+    status: str = Form(...),
+    reason: str = Form(""),
+    boconic_session: Optional[str] = Cookie(None),
+    db: AsyncSession = Depends(get_db),
+):
+    admin = await get_optional_admin(boconic_session, db)
+    if not admin:
+        return RedirectResponse(url="/admin/login", status_code=303)
+
+    try:
+        await UserService.update_user_status(
+            db=db,
+            user_id=user_id,
+            new_status=status,
+            reason=reason,
+            admin_id=admin.username,
+        )
+        await db.commit()
+        return RedirectResponse(
+            url=f"/admin/users/{user_id}?message=Đã+cập+nhật+trạng+thái+thành+công",
+            status_code=303,
+        )
+    except Exception as e:
+        await db.rollback()
+        return RedirectResponse(
+            url=f"/admin/users/{user_id}?error={str(e)}",
+            status_code=303,
+        )
+
+
+@router.post("/users/{user_id}/warn", response_class=HTMLResponse)
+async def admin_warn_user_form(
+    user_id: str,
+    category: str = Form(...),
+    severity: str = Form(...),
+    message: str = Form(...),
+    reason: str = Form(...),
+    boconic_session: Optional[str] = Cookie(None),
+    db: AsyncSession = Depends(get_db),
+):
+    admin = await get_optional_admin(boconic_session, db)
+    if not admin:
+        return RedirectResponse(url="/admin/login", status_code=303)
+
+    try:
+        await WarningService.issue_warning(
+            db=db,
+            subject_user_id=user_id,
+            category=category,
+            severity=severity,
+            message=message,
+            reason=reason,
+            issued_by=admin.username,
+        )
+        await db.commit()
+        return RedirectResponse(
+            url=f"/admin/users/{user_id}?message=Đã+gửi+cảnh+cáo+thành+công",
+            status_code=303,
+        )
+    except Exception as e:
+        await db.rollback()
+        return RedirectResponse(
+            url=f"/admin/users/{user_id}?error={str(e)}",
+            status_code=303,
+        )
+
+
+@router.post("/users/{user_id}/force-return/{loan_id}", response_class=HTMLResponse)
+async def admin_force_return_loan_form(
+    user_id: str,
+    loan_id: str,
+    resolution_notes: str = Form(...),
+    boconic_session: Optional[str] = Cookie(None),
+    db: AsyncSession = Depends(get_db),
+):
+    admin = await get_optional_admin(boconic_session, db)
+    if not admin:
+        return RedirectResponse(url="/admin/login", status_code=303)
+
+    try:
+        await UserService.admin_force_return_loan(
+            db=db,
+            loan_id=loan_id,
+            admin_id=admin.username,
+            resolution_notes=resolution_notes,
+        )
+        await db.commit()
+        return RedirectResponse(
+            url=f"/admin/users/{user_id}?message=Đã+hoàn+tất+cưỡng+chế+giao+dịch+mượn",
+            status_code=303,
+        )
+    except Exception as e:
+        await db.rollback()
+        return RedirectResponse(
+            url=f"/admin/users/{user_id}?error={str(e)}",
+            status_code=303,
+        )
 
 
 @router.get("/logout", response_class=HTMLResponse)

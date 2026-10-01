@@ -444,7 +444,15 @@ class BoconicInternalClient:
             res.raise_for_status()
             return res.json()
 
+    async def get_my_resources(self, telegram_user_id: int) -> Dict[str, Any]:
+        url = f"{self.base_url}/api/v1/internal/telegram/users/me/resources"
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            res = await client.get(url, headers=self._headers(telegram_user_id))
+            res.raise_for_status()
+            return res.json()
+
 
 internal_bot_client = BoconicInternalClient()
+
 
 

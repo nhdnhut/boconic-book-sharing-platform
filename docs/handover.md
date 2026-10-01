@@ -1,8 +1,8 @@
 # Boconic — Project Handover & Checkpoint Report
 
-**Version:** 3.0  
+**Version:** 3.1  
 **Date:** 01/10/2026  
-**Status:** M0–M9 P0 Complete, Integrated & Fully Verified  
+**Status:** M0–M10 P0 Complete, Integrated & Fully Verified  
 **Tagline:** *Find what you need. Find who can help.*  
 **Super Admin:** `@nhutnhd` (Telegram ID: `5631371609`, strictly verified by numeric ID)
 
@@ -15,12 +15,13 @@
 | **M0–M7** | Core catalog (Book, BookCopy, Edition), RBAC, Admin Console, Telegram Bot Gateway, Physical dual-party lending handshake (`reserved` -> `active` -> `return_pending` -> `returned`), Custom fields, CSV Import/Export with anti-injection defense, Backup/Restore rehearsal | ✅ 100% Complete & Verified |
 | **M8** | Community Requests & Needs, Partial Materials policy & holdings (`CopyCoverageRange`), Support Offers, Borrow Requests, Trust Score updates, Warning & Appeal subsystem | ✅ 100% Complete & Verified |
 | **M9** | **Chapter Self-Management & Integrity Upgrade**:<br>• Three-way separation: Canonical Catalog, Holding Coverage, Personal Study Progress.<br>• Chapter Proposals & Revision workflow with hierarchy & cycle checks, base version conflict detection.<br>• User Study Progress (not_started, in_progress, completed), bookmarks, private personal notes, Markdown notes export.<br>• Quarantined Chapter Resources with rights verification pipeline.<br>• Missing chapter watch subscriptions.<br>• Chapter-scoped Need matching: Full copy covers chapter request; partial copy matches on coverage range intersection.<br>• Automated revalidation trigger on chapter page range mutations.<br>• Admin Chapter Proposals (`/admin/chapter-proposals`) & Process Diagnostics (`/admin/process-audit`).<br>• Telegram Bot `/chapters` command and callback flows (`ch_list`, `ch_d`, `set_st`, `need_c`, `wtch_c`, `exp_n`). | ✅ 100% Complete & Verified |
+| **M10** | **User Management & Resource Tracking**:<br>• Real-time tracking of 7 resource categories in use: Borrowings in physical custody (`Loan` as borrower, overdue alert), Lendings (`Loan` as lender), Owned copies/photo excerpts (`BookCopy`), Digital chapter resources (`ChapterResource`), Open needs (`CommunityRequest`), Active offers (`SupportOffer`), Study progress & private notes (`UserChapterProgress`).<br>• Admin Users Console (`/admin/users`) with search, status filtering, and trust score metrics.<br>• User Resource Detail (`/admin/users/{user_id}`) with actions: status change (`active`/`suspended`/`banned`) with audit logging, administrative warning issuance, and forced loan completion (`admin_force_return`).<br>• REST API `/api/v1/me/resources` and internal bot bridge `/api/v1/internal/telegram/users/me/resources`.<br>• Telegram Bot `/myresources` and keyboard button `🎒 Tài nguyên đang dùng`. | ✅ 100% Complete & Verified |
 
 ---
 
 ## 2. Tested & Verified Evidence
 
-- **Total Automated Pytest Suite:** **40 passed** in 21.04s (`tests/test_chapter_and_process_integrity.py`, `tests/test_requests_library.py`, `tests/test_bot_gateway.py`, and core tests).
+- **Total Automated Pytest Suite:** **45 passed** in 33.40s (`tests/test_user_management.py`, `tests/test_chapter_and_process_integrity.py`, `tests/test_requests_library.py`, `tests/test_bot_gateway.py`, and core tests).
 - **Mandatory Integrity Scenarios (16/16 Covered & Passing):**
   1. *Scenario 1:* Book/copy creation -> Chapter proposal -> Admin approval -> Chapter visibility -> Holding coverage & private study progress -> Search & matching accuracy.
   2. *Scenario 2:* Partial copy (chapter 2 only) vs request for chapter 3: non-match verified; request for chapter 2 matches.
@@ -70,6 +71,7 @@ All documents are located in `docs/`:
 8. [docs/process-test-results.md](file:///c:/Users/nguye/Desktop/Boconic/docs/process-test-results.md): Detailed test execution report for all 16 mandatory integration scenarios and full test suites.
 9. [docs/requirements-traceability.md](file:///c:/Users/nguye/Desktop/Boconic/docs/requirements-traceability.md): Bidirectional traceability matrix from user requirements to models, services, endpoints, tests, and verdicts.
 10. [docs/chapter-migration-plan.md](file:///c:/Users/nguye/Desktop/Boconic/docs/chapter-migration-plan.md): Safe migration and backward-compatibility execution plan for chapter data and schema versions.
+11. [docs/user-management.md](file:///c:/Users/nguye/Desktop/Boconic/docs/user-management.md): Architecture and operational guide for User Management, Real-time Resource Tracking in custody, and admin moderation controls.
 
 ---
 
@@ -93,7 +95,7 @@ python -m app.jobs.worker
 # 5. Start Telegram Bot Gateway
 python -m app.bot.main
 
-# 6. Execute full verification suite (40 tests)
+# 6. Execute full verification suite (45 tests)
 python -m pytest tests/ -v
 python scripts/smoke_test.py
 ```
@@ -103,6 +105,7 @@ python scripts/smoke_test.py
 - **Username:** `admin`
 - **Password:** `Boconic@2026`
 - **Key Admin Views:**
+  * User Management & Resource Tracking: `http://localhost:8000/admin/users`
   * Chapter Proposals: `http://localhost:8000/admin/chapter-proposals`
   * Process Diagnostics: `http://localhost:8000/admin/process-audit`
   * Requests & Needs: `http://localhost:8000/admin/requests`

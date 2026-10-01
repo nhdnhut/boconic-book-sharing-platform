@@ -1621,3 +1621,70 @@ async def handle_callback_export_notes(call: CallbackQuery):
         await call.answer(f"Lỗi: {parse_http_error(e)}", show_alert=True)
 
 
+@router.message(F.text == "🎒 Tài nguyên đang dùng")
+@router.message(Command("myresources"))
+async def handle_my_resources(message: Message):
+    actor_id = message.from_user.id
+    try:
+        data = await internal_bot_client.get_my_resources(actor_id)
+    except Exception as e:
+        await message.answer(f"Lỗi kiểm tra tài nguyên: {parse_http_error(e)}")
+        return
+
+    borrowed = data.get("borrowed_loans", [])
+    lent = data.get("lent_loans", [])
+    owned = data.get("owned_copies", [])
+    needs = data.get("open_needs", [])
+    progress = data.get("study_progress", {})
+    trust = data.get("trust_profile", {})
+
+    lines = [
+        f"🎒 **TÀI NGUYÊN ĐANG SỬ DỤNG — {data.get('display_name')}**\n",
+        f"⭐ **Chỉ số Uy tín:** {trust.get('reliability_score', 'N/A')}% ({trust.get('history_label', 'Chưa có lịch sử')})\n",
+        "────────────────────────────",
+        f"📖 **1. Sách đang mượn & cầm giữ ({len(borrowed)} cuốn):**"
+    ]
+
+    if not borrowed:
+        lines.append("   • *Hiện bạn không giữ cuốn sách nào của người khác.*")
+    else:
+        for idx, b in enumerate(borrowed, 1):
+            overdue_txt = " ⚠️ **QUÁ HẠN!**" if b.get("is_overdue") else ""
+            due_str = b.get("due_at", "")[:10] if b.get("due_at") else "Chưa rõ"
+            lines.append(
+                f"   {idx}. 📚 **{b['book_title']}**{overdue_txt}\n"
+                f"      • Mã: `{b['copy_code'] or b['copy_id'][:8]}` | Hạn trả: **{due_str}**\n"
+                f"      • Chủ sách: {b['lender_name']}"
+            )
+
+    lines.append("\n" + f"🤝 **2. Sách cá nhân đang cho mượn ({len(lent)} cuốn):**")
+    if not lent:
+        lines.append("   • *Không có cuốn nào đang cho mượn ngoài.*")
+    else:
+        for idx, l in enumerate(lent, 1):
+            due_str = l.get("due_at", "")[:10] if l.get("due_at") else "N/A"
+            lines.append(
+                f"   {idx}. 📚 **{l['book_title']}**\n"
+                f"      • Người mượn: {l['borrower_name']} | Hạn trả: {due_str}"
+            )
+
+    lines.append("\n" + f"📦 **3. Kho sách sở hữu đã đăng ký:** **{len(owned)} bản sách**")
+    lines.append(f"📢 **4. Nhu cầu đang tìm:** **{len(needs)} nhu cầu mở**")
+    lines.append(
+        f"🎓 **5. Tiến độ học:** Đã đọc **{progress.get('completed_chapters', 0)}** chương | "
+        f"Đang đọc **{progress.get('in_progress_chapters', 0)}** chương | "
+        f"**{progress.get('notes_count', 0)}** ghi chú"
+    )
+
+    lines.append("\n💡 *Gõ /chapters để xem chi tiết học tập từng chương hoặc /myloans để xem hạn trả chi tiết.*")
+
+    kb_menu = get_main_menu_keyboard(is_admin=is_admin(message.from_user.id))
+    await message.answer("\n".join(lines), reply_markup=kb_menu, parse_mode="Markdown")
+
+
+@router.message(F.text == "📖 Quản lý theo chương")
+async def handle_chapters_menu_button(message: Message):
+    await handle_chapters_command(message)
+
+
+

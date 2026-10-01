@@ -327,3 +327,21 @@ async def export_personal_notes(
     md_content = await ChapterService.export_user_notes(db, user_id=user_id, book_id=book_id)
     return {"book_id": book_id, "markdown": md_content}
 
+
+@router.get("/resources")
+async def get_my_active_resources(
+    user_id: str = Query(..., description="User ID"),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Get all active physical and digital resources currently in use by the user:
+    - Borrowed books in custody
+    - Lent books to others
+    - Owned copies summary
+    - Open needs & offers
+    - Study progress & trust profile
+    """
+    from app.services.user_service import UserService
+    return await UserService.get_user_resources_summary_api(db, user_id=user_id)
+
+

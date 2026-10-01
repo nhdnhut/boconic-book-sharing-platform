@@ -1,0 +1,598 @@
+{% extends "base.html" %}
+
+{% block page_title %}Chi tiết người dùng & Tài nguyên đang dùng{% endblock %}
+
+{% block content %}
+<!-- Breadcrumb -->
+<div style="margin-bottom: 16px; font-size: 0.9rem; color: #64748b;">
+  <a href="/admin/users" style="color: #2563eb; text-decoration: none;">« Danh sách người dùng</a>
+  <span style="margin: 0 8px;">/</span>
+  <span style="color: #0f172a; font-weight: 600;">{{ user.display_name }} (@{{ user.public_alias }})</span>
+</div>
+
+{% if message %}
+<div style="background: #dcfce7; border: 1px solid #86efac; color: #166534; padding: 12px 16px; border-radius: 8px; margin-bottom: 20px; font-weight: 600;">
+  ✅ {{ message }}
+</div>
+{% endif %}
+
+{% if error %}
+<div style="background: #fee2e2; border: 1px solid #fca5a5; color: #991b1b; padding: 12px 16px; border-radius: 8px; margin-bottom: 20px; font-weight: 600;">
+  ❌ {{ error }}
+</div>
+{% endif %}
+
+<!-- Header Profile Card & Quick Actions -->
+<div style="background: white; border: 1px solid #e2e8f0; border-radius: 12px; padding: 24px; margin-bottom: 24px;">
+  <div style="display: flex; flex-wrap: wrap; justify-content: space-between; align-items: flex-start; gap: 20px;">
+    
+    <!-- User Info Left -->
+    <div style="display: flex; gap: 18px; align-items: flex-start;">
+      <div style="width: 64px; height: 64px; border-radius: 50%; background: #e0e7ff; color: #4338ca; display: flex; align-items: center; justify-content: center; font-size: 1.6rem; font-weight: 700;">
+        {{ user.display_name[:1].upper() }}
+      </div>
+      <div>
+        <div style="display: flex; align-items: center; gap: 10px;">
+          <h1 style="font-size: 1.4rem; font-weight: 700; color: #0f172a; margin: 0;">{{ user.display_name }}</h1>
+          {% if user.status == 'active' %}
+          <span style="background: #dcfce7; color: #166534; padding: 3px 10px; border-radius: 9999px; font-size: 0.8rem; font-weight: 600;">Hoạt động (Active)</span>
+          {% elif user.status == 'suspended' %}
+          <span style="background: #fef3c7; color: #92400e; padding: 3px 10px; border-radius: 9999px; font-size: 0.8rem; font-weight: 600;">Tạm khóa (Suspended)</span>
+          {% elif user.status == 'banned' %}
+          <span style="background: #fee2e2; color: #991b1b; padding: 3px 10px; border-radius: 9999px; font-size: 0.8rem; font-weight: 600;">Cấm vĩnh viễn (Banned)</span>
+          {% endif %}
+        </div>
+        <div style="color: #64748b; font-size: 0.9rem; margin-top: 4px;">
+          Alias: <strong>@{{ user.public_alias }}</strong> &nbsp;|&nbsp;
+          ID: <code style="background: #f1f5f9; padding: 2px 6px; border-radius: 4px; font-size: 0.85rem;">{{ user.id }}</code>
+        </div>
+        <div style="font-size: 0.85rem; color: #64748b; margin-top: 6px;">
+          Telegram Numeric ID: <strong>{{ user.telegram_user_id or 'Chưa liên kết' }}</strong>
+          {% if user.telegram_username %} (<strong>@{{ user.telegram_username }}</strong>){% endif %}
+          &nbsp;•&nbsp; Gia nhập: <strong>{{ user.created_at.strftime('%d/%m/%Y %H:%M') }}</strong>
+        </div>
+        {% if locations %}
+        <div style="font-size: 0.85rem; color: #475569; margin-top: 4px;">
+          📍 Khu vực: {{ locations[0].district or '' }}, {{ locations[0].city or '' }} ({{ locations[0].country }})
+        </div>
+        {% endif %}
+      </div>
+    </div>
+
+    <!-- Actions Right: Status change & Warn -->
+    <div style="display: flex; flex-direction: column; gap: 12px; min-width: 280px;">
+      <!-- Update status form -->
+      <form method="POST" action="/admin/users/{{ user.id }}/status" style="background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 12px; margin: 0;">
+        <div style="font-size: 0.85rem; font-weight: 600; color: #334155; margin-bottom: 8px;">Thay đổi trạng thái tài khoản:</div>
+        <div style="display: flex; gap: 8px; margin-bottom: 8px;">
+          <select name="status" style="flex: 1; padding: 6px 10px; border: 1px solid #cbd5e1; border-radius: 6px; font-size: 0.85rem;">
+            <option value="active" {% if user.status == 'active' %}selected{% endif %}>Hoạt động (Active)</option>
+            <option value="suspended" {% if user.status == 'suspended' %}selected{% endif %}>Tạm khóa (Suspended)</option>
+            <option value="banned" {% if user.status == 'banned' %}selected{% endif %}>Cấm vĩnh viễn (Banned)</option>
+          </select>
+          <button type="submit" class="btn btn-primary" style="padding: 6px 14px; font-size: 0.85rem; font-weight: 600;">Cập nhật</button>
+        </div>
+        <input type="text" name="reason" placeholder="Lý do thay đổi (ghi vào audit)..." style="width: 100%; padding: 6px 10px; border: 1px solid #cbd5e1; border-radius: 6px; font-size: 0.8rem; box-sizing: border-box;">
+      </form>
+    </div>
+
+  </div>
+</div>
+
+<!-- Thống kê Uy tín & Điểm danh -->
+<div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 16px; margin-bottom: 24px;">
+  <div style="background: white; border: 1px solid #e2e8f0; border-radius: 10px; padding: 16px;">
+    <div style="font-size: 0.8rem; font-weight: 600; color: #64748b; text-transform: uppercase;">Độ tin cậy (Reliability)</div>
+    <div style="font-size: 1.6rem; font-weight: 700; color: #059669; margin-top: 4px;">
+      {{ trust_profile.reliability_score if trust_profile.reliability_score is not none else 'Chưa có' }}{% if trust_profile.reliability_score is not none %}%{% endif %}
+    </div>
+    <div style="font-size: 0.75rem; color: #64748b; margin-top: 2px;">{{ trust_profile.history_label }}</div>
+  </div>
+
+  <div style="background: white; border: 1px solid #e2e8f0; border-radius: 10px; padding: 16px;">
+    <div style="font-size: 0.8rem; font-weight: 600; color: #64748b; text-transform: uppercase;">Lượt trả đúng hạn</div>
+    <div style="font-size: 1.6rem; font-weight: 700; color: #2563eb; margin-top: 4px;">{{ trust_profile.on_time_returns }}</div>
+    <div style="font-size: 0.75rem; color: #64748b; margin-top: 2px;">Trên tổng số {{ trust_profile.total_returns }} lượt mượn</div>
+  </div>
+
+  <div style="background: white; border: 1px solid #e2e8f0; border-radius: 10px; padding: 16px;">
+    <div style="font-size: 0.8rem; font-weight: 600; color: #64748b; text-transform: uppercase;">Lượt trả trễ / Vi phạm</div>
+    <div style="font-size: 1.6rem; font-weight: 700; color: {% if trust_profile.late_returns > 0 %}#dc2626{% else %}#64748b{% endif %}; margin-top: 4px;">
+      {{ trust_profile.late_returns }}
+    </div>
+    <div style="font-size: 0.75rem; color: #64748b; margin-top: 2px;">{{ trust_profile.disputes }} sự vụ tranh chấp</div>
+  </div>
+
+  <div style="background: white; border: 1px solid #e2e8f0; border-radius: 10px; padding: 16px;">
+    <div style="font-size: 0.8rem; font-weight: 600; color: #64748b; text-transform: uppercase;">Cảnh báo hiện hành</div>
+    <div style="font-size: 1.6rem; font-weight: 700; color: {% if warnings %}#dc2626{% else %}#64748b{% endif %}; margin-top: 4px;">
+      {{ warnings|length }}
+    </div>
+    <div style="font-size: 0.75rem; color: #64748b; margin-top: 2px;">Vi phạm từ hệ thống/admin</div>
+  </div>
+</div>
+
+<!-- ============================================================== -->
+<!-- DANH MỤC TÀI NGUYÊN NGƯỜI DÙNG ĐANG DÙNG & LIÊN QUAN -->
+<!-- ============================================================== -->
+
+<!-- 1. SÁCH ĐANG MƯỢN / ĐANG GIỮ TRONG TAY (CUSTODY) -->
+<div class="card" style="background: white; border: 1px solid #e2e8f0; border-radius: 12px; margin-bottom: 24px; overflow: hidden;">
+  <div style="padding: 16px 20px; background: #f8fafc; border-bottom: 1px solid #e2e8f0; display: flex; justify-content: space-between; align-items: center;">
+    <div>
+      <h2 style="font-size: 1.1rem; font-weight: 700; color: #0f172a; margin: 0;">📖 Sách đang mượn & Đang giữ (Custody) ({{ borrowed_loans|length }})</h2>
+      <p style="font-size: 0.85rem; color: #64748b; margin: 2px 0 0 0;">Các bản sách vật lý người dùng đang trực tiếp cầm giữ hoặc đang giữ chỗ.</p>
+    </div>
+    <span class="badge" style="background: #dbeafe; color: #1e40af; padding: 4px 10px; border-radius: 9999px; font-weight: 600; font-size: 0.85rem;">
+      {{ borrowed_loans|length }} giao dịch đang mở
+    </span>
+  </div>
+
+  <div class="table-container" style="overflow-x: auto;">
+    <table class="table" style="width: 100%; border-collapse: collapse; text-align: left;">
+      <thead style="background: #fdfdfd; border-bottom: 1px solid #e2e8f0;">
+        <tr>
+          <th style="padding: 12px 16px; font-size: 0.85rem; color: #475569;">Đầu sách & Ấn bản</th>
+          <th style="padding: 12px 16px; font-size: 0.85rem; color: #475569;">Mã bản sách</th>
+          <th style="padding: 12px 16px; font-size: 0.85rem; color: #475569;">Chủ sở hữu (Lender)</th>
+          <th style="padding: 12px 16px; font-size: 0.85rem; color: #475569;">Ngày mượn</th>
+          <th style="padding: 12px 16px; font-size: 0.85rem; color: #475569;">Hạn trả (Due At)</th>
+          <th style="padding: 12px 16px; font-size: 0.85rem; color: #475569;">Trạng thái</th>
+          <th style="padding: 12px 16px; font-size: 0.85rem; color: #475569;">Thao tác Quản trị</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% if not borrowed_loans %}
+        <tr>
+          <td colspan="7" style="padding: 24px; text-align: center; color: #94a3b8;">
+            Người dùng hiện không giữ cuốn sách nào của người khác.
+          </td>
+        </tr>
+        {% endif %}
+
+        {% for b in borrowed_loans %}
+        <tr style="border-bottom: 1px solid #f1f5f9; background: {% if b.is_overdue %}#fff1f2{% else %}white{% endif %};">
+          <td style="padding: 14px 16px;">
+            <div style="font-weight: 600; color: #0f172a;">{{ b.book.title if b.book else 'N/A' }}</div>
+            {% if b.book and b.book.isbn %}
+            <div style="font-size: 0.75rem; color: #64748b;">ISBN: {{ b.book.isbn }}</div>
+            {% endif %}
+          </td>
+          <td style="padding: 14px 16px; font-family: monospace; font-size: 0.85rem; color: #334155;">
+            {{ b.copy.barcode or b.copy.id[:8] if b.copy else 'N/A' }}
+          </td>
+          <td style="padding: 14px 16px; font-size: 0.85rem;">
+            {% if b.lender %}
+            <a href="/admin/users/{{ b.lender.id }}" style="color: #2563eb; font-weight: 600; text-decoration: none;">
+              {{ b.lender.display_name }} (@{{ b.lender.public_alias }})
+            </a>
+            {% else %}
+            N/A
+            {% endif %}
+          </td>
+          <td style="padding: 14px 16px; font-size: 0.85rem; color: #475569;">
+            {{ b.loan.handed_over_at.strftime('%d/%m/%Y %H:%M') if b.loan.handed_over_at else 'Chưa giao nhận' }}
+          </td>
+          <td style="padding: 14px 16px; font-size: 0.85rem;">
+            {% if b.due_at %}
+            <div style="font-weight: 600; color: {% if b.is_overdue %}#dc2626{% else %}#0f172a{% endif %};">
+              {{ b.due_at.strftime('%d/%m/%Y %H:%M') }}
+            </div>
+            {% if b.is_overdue %}
+            <span style="display: inline-block; background: #dc2626; color: white; padding: 2px 6px; border-radius: 4px; font-size: 0.75rem; font-weight: 700; margin-top: 2px;">
+              ⚠️ ĐÃ QUÁ HẠN
+            </span>
+            {% endif %}
+            {% else %}
+            <span style="color: #94a3b8;">N/A</span>
+            {% endif %}
+          </td>
+          <td style="padding: 14px 16px;">
+            {% if b.loan.status == 'active' %}
+            <span class="badge" style="background: #dbeafe; color: #1e40af; padding: 3px 8px; border-radius: 4px; font-size: 0.8rem; font-weight: 600;">Đang giữ sách</span>
+            {% elif b.loan.status == 'return_pending' %}
+            <span class="badge" style="background: #fef3c7; color: #92400e; padding: 3px 8px; border-radius: 4px; font-size: 0.8rem; font-weight: 600;">Chờ chủ xác nhận trả</span>
+            {% elif b.loan.status == 'reserved' %}
+            <span class="badge" style="background: #f1f5f9; color: #475569; padding: 3px 8px; border-radius: 4px; font-size: 0.8rem;">Đang giữ chỗ</span>
+            {% else %}
+            <span class="badge" style="background: #fee2e2; color: #991b1b; padding: 3px 8px; border-radius: 4px; font-size: 0.8rem;">{{ b.loan.status }}</span>
+            {% endif %}
+          </td>
+          <td style="padding: 14px 16px;">
+            <!-- Force return modal / form -->
+            <form method="POST" action="/admin/users/{{ user.id }}/force-return/{{ b.loan.id }}" style="margin: 0;" onsubmit="return confirm('Bạn có chắc chắn muốn cưỡng chế hoàn tất lượt mượn này? Bản sách sẽ được chuyển về trạng thái sẵn sàng (available).');">
+              <input type="hidden" name="resolution_notes" value="Admin giải quyết cưỡng chế hoàn tất lượt mượn">
+              <button type="submit" class="btn btn-secondary" style="padding: 4px 8px; font-size: 0.75rem; color: #dc2626; border-color: #fca5a5;">
+                ⚖️ Cưỡng chế hoàn tất
+              </button>
+            </form>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<!-- 2. SÁCH CÁ NHÂN ĐANG CHO NGƯỜI KHÁC MƯỢN -->
+<div class="card" style="background: white; border: 1px solid #e2e8f0; border-radius: 12px; margin-bottom: 24px; overflow: hidden;">
+  <div style="padding: 16px 20px; background: #f8fafc; border-bottom: 1px solid #e2e8f0; display: flex; justify-content: space-between; align-items: center;">
+    <div>
+      <h2 style="font-size: 1.1rem; font-weight: 700; color: #0f172a; margin: 0;">🤝 Sách cá nhân đang cho mượn (Lent Out) ({{ lent_loans|length }})</h2>
+      <p style="font-size: 0.85rem; color: #64748b; margin: 2px 0 0 0;">Sách thuộc quyền sở hữu của user nhưng đang được người khác mượn sử dụng.</p>
+    </div>
+  </div>
+
+  <div class="table-container" style="overflow-x: auto;">
+    <table class="table" style="width: 100%; border-collapse: collapse; text-align: left;">
+      <thead style="background: #fdfdfd; border-bottom: 1px solid #e2e8f0;">
+        <tr>
+          <th style="padding: 12px 16px; font-size: 0.85rem; color: #475569;">Đầu sách</th>
+          <th style="padding: 12px 16px; font-size: 0.85rem; color: #475569;">Mã bản sách</th>
+          <th style="padding: 12px 16px; font-size: 0.85rem; color: #475569;">Người đang mượn (Borrower)</th>
+          <th style="padding: 12px 16px; font-size: 0.85rem; color: #475569;">Hạn trả</th>
+          <th style="padding: 12px 16px; font-size: 0.85rem; color: #475569;">Trạng thái</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% if not lent_loans %}
+        <tr>
+          <td colspan="5" style="padding: 24px; text-align: center; color: #94a3b8;">
+            Không có sách nào đang cho người khác mượn.
+          </td>
+        </tr>
+        {% endif %}
+
+        {% for l in lent_loans %}
+        <tr style="border-bottom: 1px solid #f1f5f9;">
+          <td style="padding: 14px 16px; font-weight: 600; color: #0f172a;">{{ l.book.title if l.book else 'N/A' }}</td>
+          <td style="padding: 14px 16px; font-family: monospace; font-size: 0.85rem;">{{ l.copy.barcode or l.copy.id[:8] if l.copy else 'N/A' }}</td>
+          <td style="padding: 14px 16px; font-size: 0.85rem;">
+            {% if l.borrower %}
+            <a href="/admin/users/{{ l.borrower.id }}" style="color: #2563eb; font-weight: 600; text-decoration: none;">
+              {{ l.borrower.display_name }} (@{{ l.borrower.public_alias }})
+            </a>
+            {% else %}
+            N/A
+            {% endif %}
+          </td>
+          <td style="padding: 14px 16px; font-size: 0.85rem;">
+            {{ l.due_at.strftime('%d/%m/%Y %H:%M') if l.due_at else 'N/A' }}
+          </td>
+          <td style="padding: 14px 16px;">
+            <span class="badge" style="background: #f1f5f9; color: #475569; padding: 3px 8px; border-radius: 4px; font-size: 0.8rem;">
+              {{ l.loan.status }}
+            </span>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<!-- 3. KHO SÁCH & TÀI LIỆU SỞ HỮU -->
+<div class="card" style="background: white; border: 1px solid #e2e8f0; border-radius: 12px; margin-bottom: 24px; overflow: hidden;">
+  <div style="padding: 16px 20px; background: #f8fafc; border-bottom: 1px solid #e2e8f0; display: flex; justify-content: space-between; align-items: center;">
+    <div>
+      <h2 style="font-size: 1.1rem; font-weight: 700; color: #0f172a; margin: 0;">📦 Kho sách cá nhân sở hữu ({{ owned_copies|length }})</h2>
+      <p style="font-size: 0.85rem; color: #64748b; margin: 2px 0 0 0;">Danh mục toàn bộ bản sách & tài liệu photocopy 1 phần mà người dùng đã đăng ký.</p>
+    </div>
+  </div>
+
+  <div class="table-container" style="overflow-x: auto;">
+    <table class="table" style="width: 100%; border-collapse: collapse; text-align: left;">
+      <thead style="background: #fdfdfd; border-bottom: 1px solid #e2e8f0;">
+        <tr>
+          <th style="padding: 12px 16px; font-size: 0.85rem; color: #475569;">Đầu sách</th>
+          <th style="padding: 12px 16px; font-size: 0.85rem; color: #475569;">Loại tài liệu</th>
+          <th style="padding: 12px 16px; font-size: 0.85rem; color: #475569;">Tình trạng vật lý</th>
+          <th style="padding: 12px 16px; font-size: 0.85rem; color: #475569;">Trạng thái lưu thông</th>
+          <th style="padding: 12px 16px; font-size: 0.85rem; color: #475569;">Người đang giữ</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% if not owned_copies %}
+        <tr>
+          <td colspan="5" style="padding: 24px; text-align: center; color: #94a3b8;">
+            Người dùng chưa khai báo cuốn sách nào vào kho cá nhân.
+          </td>
+        </tr>
+        {% endif %}
+
+        {% for c in owned_copies %}
+        <tr style="border-bottom: 1px solid #f1f5f9;">
+          <td style="padding: 14px 16px;">
+            <div style="font-weight: 600; color: #0f172a;">{{ c.book.title if c.book else 'N/A' }}</div>
+            <div style="font-size: 0.75rem; color: #64748b;">Mã: {{ c.barcode or c.id[:8] }}</div>
+          </td>
+          <td style="padding: 14px 16px; font-size: 0.85rem;">
+            {% if c.is_partial %}
+            <span style="background: #fef3c7; color: #92400e; padding: 2px 8px; border-radius: 4px; font-weight: 600;">Photo 1 phần</span>
+            {% if c.coverage_ranges %}
+            <div style="font-size: 0.75rem; color: #64748b; margin-top: 2px;">
+              Trang {{ c.coverage_ranges[0].start_page }}–{{ c.coverage_ranges[0].end_page }}
+            </div>
+            {% endif %}
+            {% else %}
+            <span style="background: #e0f2fe; color: #0369a1; padding: 2px 8px; border-radius: 4px; font-weight: 600;">Toàn cuốn sách</span>
+            {% endif %}
+          </td>
+          <td style="padding: 14px 16px; font-size: 0.85rem; color: #475569;">
+            {{ c.condition_status }}
+          </td>
+          <td style="padding: 14px 16px;">
+            {% if c.circulation_status == 'available' %}
+            <span class="badge badge-success" style="background: #dcfce7; color: #166534; padding: 3px 8px; border-radius: 4px; font-size: 0.8rem; font-weight: 600;">Sẵn sàng (Available)</span>
+            {% elif c.circulation_status == 'on_loan' %}
+            <span class="badge" style="background: #dbeafe; color: #1e40af; padding: 3px 8px; border-radius: 4px; font-size: 0.8rem; font-weight: 600;">Đang cho mượn</span>
+            {% elif c.circulation_status == 'reserved' %}
+            <span class="badge" style="background: #fef3c7; color: #92400e; padding: 3px 8px; border-radius: 4px; font-size: 0.8rem;">Đang giữ chỗ</span>
+            {% else %}
+            <span class="badge" style="background: #f1f5f9; color: #475569; padding: 3px 8px; border-radius: 4px; font-size: 0.8rem;">{{ c.circulation_status }}</span>
+            {% endif %}
+          </td>
+          <td style="padding: 14px 16px; font-size: 0.85rem;">
+            {% if c.current_holder and c.current_holder_id != user.id %}
+            <a href="/admin/users/{{ c.current_holder.id }}" style="color: #2563eb; font-weight: 600; text-decoration: none;">
+              {{ c.current_holder.display_name }}
+            </a>
+            {% else %}
+            <span style="color: #059669; font-weight: 600;">Chính chủ đang giữ</span>
+            {% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<!-- 4. TÀI NGUYÊN SỐ & CHƯƠNG SÁCH ĐÃ ĐÓNG GÓP -->
+<div class="card" style="background: white; border: 1px solid #e2e8f0; border-radius: 12px; margin-bottom: 24px; overflow: hidden;">
+  <div style="padding: 16px 20px; background: #f8fafc; border-bottom: 1px solid #e2e8f0; display: flex; justify-content: space-between; align-items: center;">
+    <div>
+      <h2 style="font-size: 1.1rem; font-weight: 700; color: #0f172a; margin: 0;">📑 Tài nguyên số theo chương đã đóng góp ({{ chapter_resources|length }})</h2>
+      <p style="font-size: 0.85rem; color: #64748b; margin: 2px 0 0 0;">File, liên kết hoặc trích đoạn số do người dùng tải lên và gắn vào chương sách.</p>
+    </div>
+  </div>
+
+  <div class="table-container" style="overflow-x: auto;">
+    <table class="table" style="width: 100%; border-collapse: collapse; text-align: left;">
+      <thead style="background: #fdfdfd; border-bottom: 1px solid #e2e8f0;">
+        <tr>
+          <th style="padding: 12px 16px; font-size: 0.85rem; color: #475569;">Tiêu đề & File</th>
+          <th style="padding: 12px 16px; font-size: 0.85rem; color: #475569;">Gắn với Chương / Sách</th>
+          <th style="padding: 12px 16px; font-size: 0.85rem; color: #475569;">Loại tài nguyên</th>
+          <th style="padding: 12px 16px; font-size: 0.85rem; color: #475569;">Kiểm duyệt bản quyền</th>
+          <th style="padding: 12px 16px; font-size: 0.85rem; color: #475569;">Ngày tải lên</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% if not chapter_resources %}
+        <tr>
+          <td colspan="5" style="padding: 24px; text-align: center; color: #94a3b8;">
+            Chưa có tài nguyên số hoặc file chương nào được đóng góp.
+          </td>
+        </tr>
+        {% endif %}
+
+        {% for r in chapter_resources %}
+        <tr style="border-bottom: 1px solid #f1f5f9;">
+          <td style="padding: 14px 16px;">
+            <div style="font-weight: 600; color: #0f172a;">{{ r.title }}</div>
+            {% if r.url %}
+            <div style="font-size: 0.75rem; color: #2563eb;"><a href="{{ r.url }}" target="_blank">{{ r.url }}</a></div>
+            {% endif %}
+          </td>
+          <td style="padding: 14px 16px; font-size: 0.85rem;">
+            {% if r.chapter %}
+            <strong>Chương {{ r.chapter.chapter_number }}: {{ r.chapter.title }}</strong>
+            {% if r.chapter.book %}
+            <br><small class="text-muted">{{ r.chapter.book.title }}</small>
+            {% endif %}
+            {% else %}
+            N/A
+            {% endif %}
+          </td>
+          <td style="padding: 14px 16px; font-size: 0.85rem;">
+            <span class="badge" style="background: #f1f5f9; padding: 2px 8px; border-radius: 4px;">{{ r.resource_type }}</span>
+          </td>
+          <td style="padding: 14px 16px;">
+            {% if r.verification_status == 'verified' %}
+            <span class="badge badge-success" style="background: #dcfce7; color: #166534; padding: 2px 8px; border-radius: 4px; font-size: 0.8rem; font-weight: 600;">Đã duyệt bản quyền</span>
+            {% elif r.verification_status == 'quarantine' or r.verification_status == 'pending_review' %}
+            <span class="badge badge-warning" style="background: #fef3c7; color: #92400e; padding: 2px 8px; border-radius: 4px; font-size: 0.8rem; font-weight: 600;">⏳ Cách ly chờ duyệt</span>
+            {% else %}
+            <span class="badge badge-danger" style="background: #fee2e2; color: #991b1b; padding: 2px 8px; border-radius: 4px; font-size: 0.8rem;">{{ r.verification_status }}</span>
+            {% endif %}
+          </td>
+          <td style="padding: 14px 16px; font-size: 0.85rem; color: #64748b;">
+            {{ r.created_at.strftime('%d/%m/%Y %H:%M') }}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<!-- 5. TIẾN ĐỘ HỌC TẬP & NHU CẦU CỘNG ĐỒNG (GRID 2 CỘT) -->
+<div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(360px, 1fr)); gap: 24px; margin-bottom: 24px;">
+  
+  <!-- Nhu cầu & Đề nghị đang mở -->
+  <div class="card" style="background: white; border: 1px solid #e2e8f0; border-radius: 12px; padding: 20px;">
+    <h2 style="font-size: 1.1rem; font-weight: 700; color: #0f172a; margin: 0 0 14px 0;">📢 Nhu cầu tìm sách / chương đang mở</h2>
+    {% if not open_needs %}
+    <p style="color: #94a3b8; font-size: 0.9rem; text-align: center; padding: 16px 0;">Không có nhu cầu nào đang mở.</p>
+    {% else %}
+    <ul style="list-style: none; padding: 0; margin: 0;">
+      {% for req in open_needs %}
+      <li style="padding: 10px 0; border-bottom: 1px solid #f1f5f9;">
+        <div style="font-weight: 600; color: #0f172a; font-size: 0.9rem;">{{ req.book.title if req.book else 'N/A' }}</div>
+        <div style="font-size: 0.8rem; color: #64748b;">
+          Phạm vi: <strong>{{ req.scope_type }}</strong>
+          {% if req.target_chapters %} (Chương: {{ req.target_chapters | join(', ') }}){% endif %}
+          &nbsp;•&nbsp; {{ req.created_at.strftime('%d/%m/%Y') }}
+        </div>
+        {% if req.revalidation_required %}
+        <span style="background: #fef2f2; color: #dc2626; border: 1px solid #fecaca; font-size: 0.75rem; padding: 1px 6px; border-radius: 3px; font-weight: 700;">
+          ⚠️ Cần revalidation
+        </span>
+        {% endif %}
+      </li>
+      {% endfor %}
+    </ul>
+    {% endif %}
+
+    <h2 style="font-size: 1.1rem; font-weight: 700; color: #0f172a; margin: 20px 0 14px 0;">🤝 Đề nghị hỗ trợ đang chờ (Offers)</h2>
+    {% if not open_offers %}
+    <p style="color: #94a3b8; font-size: 0.9rem; text-align: center; padding: 12px 0;">Không có đề nghị hỗ trợ nào đang chờ.</p>
+    {% else %}
+    <ul style="list-style: none; padding: 0; margin: 0;">
+      {% for off in open_offers %}
+      <li style="padding: 10px 0; border-bottom: 1px solid #f1f5f9;">
+        <div style="font-weight: 600; color: #0f172a; font-size: 0.9rem;">
+          {{ off.need.book.title if off.need and off.need.book else 'N/A' }}
+        </div>
+        <div style="font-size: 0.8rem; color: #64748b;">
+          Trạng thái: <strong>{{ off.status }}</strong> &nbsp;•&nbsp; {{ off.created_at.strftime('%d/%m/%Y') }}
+        </div>
+      </li>
+      {% endfor %}
+    </ul>
+    {% endif %}
+  </div>
+
+  <!-- Tiến độ học tập theo chương -->
+  <div class="card" style="background: white; border: 1px solid #e2e8f0; border-radius: 12px; padding: 20px;">
+    <h2 style="font-size: 1.1rem; font-weight: 700; color: #0f172a; margin: 0 0 14px 0;">🎓 Tiến độ học tập & Bookmark cá nhân</h2>
+    
+    <div style="display: flex; gap: 12px; margin-bottom: 16px;">
+      <div style="flex: 1; background: #f0fdf4; border: 1px solid #bbf7d0; border-radius: 8px; padding: 10px; text-align: center;">
+        <div style="font-size: 1.2rem; font-weight: 700; color: #166534;">{{ study_progress.completed_chapters }}</div>
+        <div style="font-size: 0.75rem; color: #166534; font-weight: 600;">Chương đã xong</div>
+      </div>
+      <div style="flex: 1; background: #eff6ff; border: 1px solid #bfdbfe; border-radius: 8px; padding: 10px; text-align: center;">
+        <div style="font-size: 1.2rem; font-weight: 700; color: #1e40af;">{{ study_progress.in_progress_chapters }}</div>
+        <div style="font-size: 0.75rem; color: #1e40af; font-weight: 600;">Chương đang học</div>
+      </div>
+      <div style="flex: 1; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 10px; text-align: center;">
+        <div style="font-size: 1.2rem; font-weight: 700; color: #334155;">{{ study_progress.notes_count }}</div>
+        <div style="font-size: 0.75rem; color: #64748b; font-weight: 600;">Ghi chú riêng</div>
+      </div>
+    </div>
+
+    {% if not study_progress.records %}
+    <p style="color: #94a3b8; font-size: 0.9rem; text-align: center; padding: 16px 0;">Người dùng chưa bắt đầu học chương sách nào.</p>
+    {% else %}
+    <div style="max-height: 240px; overflow-y: auto;">
+      <ul style="list-style: none; padding: 0; margin: 0;">
+        {% for p in study_progress.records[:8] %}
+        <li style="padding: 8px 0; border-bottom: 1px solid #f1f5f9; font-size: 0.85rem;">
+          <div style="display: flex; justify-content: space-between; align-items: center;">
+            <strong style="color: #0f172a;">Chương {{ p.chapter.chapter_number if p.chapter else '' }}: {{ p.chapter.title if p.chapter else 'N/A' }}</strong>
+            {% if p.reading_state == 'completed' %}
+            <span style="background: #dcfce7; color: #166534; font-size: 0.7rem; font-weight: 700; padding: 1px 6px; border-radius: 4px;">Đã đọc xong</span>
+            {% elif p.reading_state == 'in_progress' %}
+            <span style="background: #dbeafe; color: #1e40af; font-size: 0.7rem; font-weight: 700; padding: 1px 6px; border-radius: 4px;">Đang đọc</span>
+            {% else %}
+            <span style="background: #f1f5f9; color: #475569; font-size: 0.7rem; padding: 1px 6px; border-radius: 4px;">Chưa đọc</span>
+            {% endif %}
+          </div>
+          {% if p.bookmark_page %}
+          <div style="font-size: 0.75rem; color: #64748b;">🔖 Đang dừng ở trang: {{ p.bookmark_page }}</div>
+          {% endif %}
+        </li>
+        {% endfor %}
+      </ul>
+    </div>
+    {% endif %}
+  </div>
+
+</div>
+
+<!-- 6. GỬI CẢNH BÁO VI PHẠM & LỊCH SỬ CẢNH BÁO -->
+<div class="card" style="background: white; border: 1px solid #e2e8f0; border-radius: 12px; padding: 24px; margin-bottom: 24px;">
+  <h2 style="font-size: 1.1rem; font-weight: 700; color: #0f172a; margin: 0 0 16px 0;">⚠️ Gửi cảnh cáo vi phạm & Lịch sử kỷ luật</h2>
+
+  <!-- Form phát cảnh báo -->
+  <form method="POST" action="/admin/users/{{ user.id }}/warn" style="background: #fdf2f2; border: 1px solid #fecaca; border-radius: 8px; padding: 16px; margin-bottom: 20px;">
+    <div style="font-weight: 700; color: #991b1b; font-size: 0.95rem; margin-bottom: 10px;">Phát cảnh cáo người dùng mới:</div>
+    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px; margin-bottom: 12px;">
+      <div>
+        <label style="display: block; font-size: 0.8rem; font-weight: 600; color: #475569; margin-bottom: 4px;">Phân loại vi phạm</label>
+        <select name="category" style="width: 100%; padding: 6px 10px; border: 1px solid #cbd5e1; border-radius: 6px; font-size: 0.85rem; background: white;">
+          <option value="conduct_warning">Hành vi ứng xử (Conduct Warning)</option>
+          <option value="transaction_reminder">Nhắc nhở giao dịch / Quá hạn trả sách</option>
+          <option value="rights_review">Vi phạm bản quyền / Đóng góp số sai phép</option>
+          <option value="validation">Sai lệch thông tin / Khai báo sai số trang</option>
+        </select>
+      </div>
+      <div>
+        <label style="display: block; font-size: 0.8rem; font-weight: 600; color: #475569; margin-bottom: 4px;">Mức độ nghiêm trọng</label>
+        <select name="severity" style="width: 100%; padding: 6px 10px; border: 1px solid #cbd5e1; border-radius: 6px; font-size: 0.85rem; background: white;">
+          <option value="info">Nhẹ / Nhắc nhở (Info)</option>
+          <option value="warning" selected>Cảnh cáo chính thức (Warning)</option>
+          <option value="critical">Nghiêm trọng (Critical)</option>
+        </select>
+      </div>
+    </div>
+    <div style="margin-bottom: 12px;">
+      <label style="display: block; font-size: 0.8rem; font-weight: 600; color: #475569; margin-bottom: 4px;">Thông điệp gửi người dùng (Message)</label>
+      <input type="text" name="message" placeholder="Ví dụ: Bạn đã quá hạn trả cuốn 'Đại số 10' 5 ngày. Vui lòng liên hệ chủ sách..." required style="width: 100%; padding: 8px 12px; border: 1px solid #cbd5e1; border-radius: 6px; font-size: 0.9rem; box-sizing: border-box;">
+    </div>
+    <div style="margin-bottom: 12px;">
+      <label style="display: block; font-size: 0.8rem; font-weight: 600; color: #475569; margin-bottom: 4px;">Lý do quản trị & Căn cứ (Reason)</label>
+      <input type="text" name="reason" placeholder="Căn cứ: Giao dịch trễ hạn, đã nhắc lần 2 nhưng không phản hồi..." required style="width: 100%; padding: 8px 12px; border: 1px solid #cbd5e1; border-radius: 6px; font-size: 0.9rem; box-sizing: border-box;">
+    </div>
+    <button type="submit" class="btn btn-primary" style="background: #dc2626; border-color: #dc2626; font-weight: 600; padding: 8px 18px;">
+      🚨 Phát cảnh cáo
+    </button>
+  </form>
+
+  <!-- Lịch sử các cảnh báo trước đây -->
+  <h3 style="font-size: 0.95rem; font-weight: 600; color: #334155; margin: 0 0 10px 0;">Lịch sử cảnh báo đã phát:</h3>
+  {% if not warnings %}
+  <p style="color: #94a3b8; font-size: 0.85rem;">Người dùng có lý lịch trong sạch, chưa từng bị cảnh cáo.</p>
+  {% else %}
+  <table class="table" style="width: 100%; border-collapse: collapse; text-align: left; font-size: 0.85rem;">
+    <thead style="background: #f8fafc; border-bottom: 1px solid #e2e8f0;">
+      <tr>
+        <th style="padding: 10px 14px;">Thời gian</th>
+        <th style="padding: 10px 14px;">Danh mục</th>
+        <th style="padding: 10px 14px;">Mức độ</th>
+        <th style="padding: 10px 14px;">Nội dung</th>
+        <th style="padding: 10px 14px;">Lý do quản trị</th>
+        <th style="padding: 10px 14px;">Khiếu nại</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for w in warnings %}
+      <tr style="border-bottom: 1px solid #f1f5f9;">
+        <td style="padding: 10px 14px; white-space: nowrap; color: #64748b;">{{ w.created_at.strftime('%d/%m/%Y %H:%M') }}</td>
+        <td style="padding: 10px 14px;"><strong>{{ w.category }}</strong></td>
+        <td style="padding: 10px 14px;">
+          <span style="background: {% if w.severity == 'critical' %}#fee2e2; color: #991b1b{% else %}#fef3c7; color: #92400e{% endif %}; padding: 2px 6px; border-radius: 4px; font-weight: 600;">
+            {{ w.severity }}
+          </span>
+        </td>
+        <td style="padding: 10px 14px; color: #0f172a;">{{ w.message }}</td>
+        <td style="padding: 10px 14px; color: #475569; font-style: italic;">{{ w.reason }}</td>
+        <td style="padding: 10px 14px;">
+          {% if w.appeal_status == 'none' %}
+          <span style="color: #94a3b8;">Không</span>
+          {% elif w.appeal_status == 'pending' %}
+          <span style="color: #d97706; font-weight: 600;">Đang khiếu nại</span>
+          {% else %}
+          <span>{{ w.appeal_status }}</span>
+          {% endif %}
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% endif %}
+</div>
+
+{% endblock %}

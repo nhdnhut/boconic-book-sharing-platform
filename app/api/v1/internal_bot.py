@@ -1154,3 +1154,26 @@ async def bot_create_chapter_proposal(
     }
 
 
+@router.get("/users/me/resources")
+async def bot_get_my_resources(
+    actor: User = Depends(verify_bot_actor),
+    db: AsyncSession = Depends(get_db),
+):
+    """Get active resources in use for the requesting Telegram user."""
+    from app.services.user_service import UserService
+    return await UserService.get_user_resources_summary_api(db, user_id=actor.id)
+
+
+@router.get("/users/{user_id}/resources")
+async def bot_get_user_resources(
+    user_id: str,
+    x_bot_api_key: Optional[str] = Header(None),
+    db: AsyncSession = Depends(get_db),
+):
+    """Get active resources in use by user ID."""
+    verify_bot_api_key(x_bot_api_key)
+    from app.services.user_service import UserService
+    return await UserService.get_user_resources_summary_api(db, user_id=user_id)
+
+
+
