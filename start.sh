@@ -6,7 +6,7 @@ set -e
 # ==============================================================================
 
 # 1. Hỗ trợ chế độ Docker
-if [ "$1" == "docker" ] || [ "$1" == "--docker" ] || [ "$1" == "-d" ]; then
+if [ "$1" = "docker" ] || [ "$1" = "--docker" ] || [ "$1" = "-d" ]; then
     echo "🐳 Đang khởi chạy hệ thống bằng Docker Compose..."
     docker compose up --build
     exit 0
@@ -18,6 +18,8 @@ if [ ! -f ".env" ]; then
     cp .env.example .env
     echo "✅ Đã tạo tệp .env."
 fi
+
+mkdir -p data/storage data/backups
 
 # 3. Phát hiện môi trường Python
 PYTHON_BIN=""
@@ -44,10 +46,25 @@ else
     exit 1
 fi
 
+# 3.1 Kiểm tra thư viện dependencies
+if ! $PYTHON_BIN -c "import fastapi, sqlalchemy, aiosqlite, alembic" &>/dev/null; then
+    echo "⚠️  Các thư viện Python chưa được cài đặt đầy đủ."
+    echo "📦 Đang tự động cài đặt thư viện từ requirements.txt..."
+    $PYTHON_BIN -m pip install -r requirements.txt || {
+        echo "❌ Lỗi khi cài đặt requirements.txt. Vui lòng chạy thủ công: pip install -r requirements.txt"
+        exit 1
+    }
+fi
+
 # 4. Khởi tạo CSDL, Migrations & RBAC
 echo ""
 echo "⚙️  Đang kiểm tra và đồng bộ cơ sở dữ liệu (Alembic & Setup)..."
-$PYTHON_BIN scripts/setup.py || echo "⚠️  Setup có cảnh báo, tiếp tục khởi động dịch vụ..."
+$PYTHON_BIN scripts/setup.py || {
+    echo "❌ LỖI trong quá trình thiết lập cơ sở dữ liệu!"
+    echo "👉 Gợi ý: Hãy kiểm tra biến DATABASE_URL trong tệp .env."
+    echo "👉 Mặc định nên sử dụng SQLite: DATABASE_URL=sqlite+aiosqlite:///./data/boconic.db"
+    exit 1
+}
 
 echo ""
 echo "=============================================================================="
