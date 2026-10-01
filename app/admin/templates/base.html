@@ -23,14 +23,35 @@
       <a href="/admin/dashboard" class="nav-link {% if active_nav == 'dashboard' %}active{% endif %}">
         <span>📊</span> Bảng điều khiển
       </a>
+      <a href="/admin/requests" class="nav-link {% if active_nav == 'requests' %}active{% endif %}">
+        <span>📢</span> Nhu cầu & Đề nghị
+      </a>
+      <a href="/admin/inventory" class="nav-link {% if active_nav == 'inventory' %}active{% endif %}">
+        <span>📦</span> Kho & Thư viện
+      </a>
       <a href="/admin/books" class="nav-link {% if active_nav == 'books' %}active{% endif %}">
         <span>📚</span> Đầu sách (Catalog)
       </a>
       <a href="/admin/copies" class="nav-link {% if active_nav == 'copies' %}active{% endif %}">
         <span>📖</span> Bản sách vật lý
       </a>
+      <a href="/admin/partial-materials" class="nav-link {% if active_nav == 'partial_materials' %}active{% endif %}">
+        <span>📑</span> Tài liệu 1 phần & Photo
+      </a>
+      <a href="/admin/collections" class="nav-link {% if active_nav == 'collections' %}active{% endif %}">
+        <span>🗂️</span> Authorized Collections
+      </a>
+      <a href="/admin/chapter-proposals" class="nav-link {% if active_nav == 'chapter_proposals' %}active{% endif %}">
+        <span>📑</span> Đề xuất chương
+      </a>
       <a href="/admin/loans" class="nav-link {% if active_nav == 'loans' %}active{% endif %}">
         <span>🤝</span> Lượt mượn & Tranh chấp
+      </a>
+      <a href="/admin/moderation" class="nav-link {% if active_nav == 'moderation' %}active{% endif %}">
+        <span>⚠️</span> Báo cáo & Cảnh báo
+      </a>
+      <a href="/admin/analytics" class="nav-link {% if active_nav == 'analytics' %}active{% endif %}">
+        <span>📈</span> Thống kê & Jobs
       </a>
 
       <div class="nav-section">Dữ liệu & Mở rộng</div>
@@ -42,6 +63,9 @@
       </a>
 
       <div class="nav-section">Hệ thống & An toàn</div>
+      <a href="/admin/process-audit" class="nav-link {% if active_nav == 'process_audit' %}active{% endif %}">
+        <span>🔍</span> Process Diagnostics
+      </a>
       <a href="/admin/audit" class="nav-link {% if active_nav == 'audit' %}active{% endif %}">
         <span>📋</span> Nhật ký Audit
       </a>

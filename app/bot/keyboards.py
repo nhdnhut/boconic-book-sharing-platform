@@ -1,3 +1,4 @@
+from typing import List, Optional
 from aiogram.types import (
     InlineKeyboardButton,
     InlineKeyboardMarkup,
@@ -5,43 +6,246 @@ from aiogram.types import (
     ReplyKeyboardMarkup,
 )
 
-def get_main_menu_keyboard() -> ReplyKeyboardMarkup:
+def get_main_menu_keyboard(is_admin: bool = False) -> ReplyKeyboardMarkup:
     """Main persistent reply keyboard grid."""
     keyboard = [
-        [KeyboardButton(text="🔎 Tìm sách"), KeyboardButton(text="📖 Sách của tôi")],
+        [KeyboardButton(text="🔎 Tìm sách"), KeyboardButton(text="📚 Thư viện của tôi")],
+        [KeyboardButton(text="📢 Yêu cầu sách"), KeyboardButton(text="📋 Nhu cầu của tôi")],
+        [KeyboardButton(text="➕ Đăng sách"), KeyboardButton(text="📋 Yêu cầu mượn")],
         [KeyboardButton(text="🤝 Đang mượn"), KeyboardButton(text="📤 Đang cho mượn")],
-        [KeyboardButton(text="📢 Tôi đang cần"), KeyboardButton(text="📍 Gần tôi")],
-        [KeyboardButton(text="🏛 Thư viện & Trường học"), KeyboardButton(text="🔗 Tài nguyên mở")],
-        [KeyboardButton(text="👤 Hồ sơ & Cài đặt")],
+        [KeyboardButton(text="🌐 Thư viện cộng đồng"), KeyboardButton(text="🔗 Tài nguyên mở")],
+        [KeyboardButton(text="👤 Hồ sơ & Cài đặt"), KeyboardButton(text="🚩 Báo cáo / Hỗ trợ")],
     ]
+    if is_admin:
+        keyboard.append([KeyboardButton(text="👑 Quản trị hệ thống")])
     return ReplyKeyboardMarkup(keyboard=keyboard, resize_keyboard=True)
 
+def get_cancel_keyboard() -> ReplyKeyboardMarkup:
+    """Quick cancel keyboard for FSM states."""
+    return ReplyKeyboardMarkup(
+        keyboard=[[KeyboardButton(text="❌ Hủy thao tác")]],
+        resize_keyboard=True,
+        one_time_keyboard=True,
+    )
+
 def get_book_inline_keyboard(book_id: str, available_copies: list) -> InlineKeyboardMarkup:
-    """Inline keyboard for a book: buttons to borrow available copies (callback < 64 bytes)."""
+    """Inline keyboard for a book: buttons to borrow available copies using full UUID (<= 64 bytes)."""
     buttons = []
     for c in available_copies[:3]:
-        # Prefix: b_req:<copy_id[:16]> (fits safely in 64 bytes)
-        cid_short = c["copy_id"].replace("-", "")[:16]
+        # 'brq:' (4 bytes) + uuid (36 bytes) = 40 bytes <= 64 bytes
+        cid = c["copy_id"]
         code = c["public_code"]
-        btn_text = f"Mượn bản {code} ({c['condition']})"
-        buttons.append([InlineKeyboardButton(text=btn_text, callback_data=f"brq:{cid_short}")])
+        cond = c.get("condition", "good")
+        cond_vi = {
+            "new": "Mới",
+            "like_new": "Rất tốt",
+            "good": "Tốt",
+            "fair": "Khá",
+        }.get(cond, cond)
+        btn_text = f"Mượn bản {code} ({cond_vi})"
+        buttons.append([InlineKeyboardButton(text=btn_text, callback_data=f"brq:{cid}")])
 
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
+def get_request_action_keyboard(request_id: str) -> InlineKeyboardMarkup:
+    """Action buttons for owner to accept or reject an incoming borrow request."""
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text="✅ Chấp nhận cho mượn", callback_data=f"acc:{request_id}"),
+            InlineKeyboardButton(text="❌ Từ chối", callback_data=f"rej:{request_id}"),
+        ]
+    ])
+
 def get_loan_handover_keyboard(loan_id: str, role: str) -> InlineKeyboardMarkup:
     """Action button to confirm physical handover."""
-    lid_short = loan_id.replace("-", "")[:16]
     btn_text = "🤝 Xác nhận đã giao sách" if role == "lender" else "📦 Xác nhận đã nhận được sách"
-    cb = f"hdo:{lid_short}"
-    return InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text=btn_text, callback_data=cb)]])
+    return InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text=btn_text, callback_data=f"hdo:{loan_id}")]])
 
 def get_loan_return_keyboard(loan_id: str, is_pending: bool = False) -> InlineKeyboardMarkup:
     """Action buttons to request or confirm return."""
-    lid_short = loan_id.replace("-", "")[:16]
     if not is_pending:
         return InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="🔄 Đề nghị xác nhận trả sách", callback_data=f"rt_req:{lid_short}")]
+            [InlineKeyboardButton(text="🔄 Đề nghị xác nhận trả sách", callback_data=f"rt_req:{loan_id}")]
         ])
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="✅ Xác nhận đã hoàn trả sách", callback_data=f"rt_cfm:{lid_short}")]
+        [InlineKeyboardButton(text="✅ Xác nhận đã hoàn trả sách", callback_data=f"rt_cfm:{loan_id}")]
     ])
+
+def get_condition_inline_keyboard() -> InlineKeyboardMarkup:
+    """Inline buttons to select copy condition when adding a book."""
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text="Mới (99-100%)", callback_data="cnd:new"),
+            InlineKeyboardButton(text="Rất tốt (90-95%)", callback_data="cnd:like_new"),
+        ],
+        [
+            InlineKeyboardButton(text="Tốt (80-90%)", callback_data="cnd:good"),
+            InlineKeyboardButton(text="Khá (70-80%)", callback_data="cnd:fair"),
+        ],
+    ])
+
+def get_duration_inline_keyboard() -> InlineKeyboardMarkup:
+    """Inline buttons to select maximum loan days."""
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text="7 ngày", callback_data="dur:7"),
+            InlineKeyboardButton(text="14 ngày (chuẩn)", callback_data="dur:14"),
+        ],
+        [
+            InlineKeyboardButton(text="30 ngày", callback_data="dur:30"),
+            InlineKeyboardButton(text="60 ngày", callback_data="dur:60"),
+        ],
+    ])
+
+def get_report_category_keyboard() -> InlineKeyboardMarkup:
+    """Inline buttons to select report category."""
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text="📖 Sách sai thông tin", callback_data="rpc:wrong_info"),
+            InlineKeyboardButton(text="🚫 Không đến điểm hẹn", callback_data="rpc:no_show"),
+        ],
+        [
+            InlineKeyboardButton(text="⚠️ Sách hư hỏng nặng", callback_data="rpc:damaged"),
+            InlineKeyboardButton(text="⚠️ Vi phạm bản quyền / Giả mạo", callback_data="rpc:copyright"),
+        ],
+        [
+            InlineKeyboardButton(text="Khác / Đóng góp ý kiến", callback_data="rpc:other"),
+        ],
+    ])
+
+
+def get_library_tabs_keyboard() -> InlineKeyboardMarkup:
+    """Inline buttons to switch between Personal Library tabs."""
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text="📖 Tôi sở hữu", callback_data="lib:owned"),
+            InlineKeyboardButton(text="✅ Đang sẵn sàng", callback_data="lib:available"),
+        ],
+        [
+            InlineKeyboardButton(text="📤 Đang cho mượn", callback_data="lib:lent"),
+            InlineKeyboardButton(text="🤝 Tôi đang mượn", callback_data="lib:borrowed"),
+        ],
+        [
+            InlineKeyboardButton(text="📌 Wishlist", callback_data="lib:wishlist"),
+            InlineKeyboardButton(text="📑 Tài liệu 1 phần", callback_data="lib:resources"),
+        ],
+        [
+            InlineKeyboardButton(text="📜 Lịch sử mượn", callback_data="lib:history"),
+            InlineKeyboardButton(text="📚 Tất cả", callback_data="lib:all"),
+        ],
+    ])
+
+
+def get_need_scope_keyboard() -> InlineKeyboardMarkup:
+    """Inline buttons to choose book need scope."""
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="📖 Cả quyển sách", callback_data="scp:full_book")],
+        [InlineKeyboardButton(text="📑 Chương / Chủ đề", callback_data="scp:chapters")],
+        [InlineKeyboardButton(text="📄 Khoảng trang cụ thể", callback_data="scp:page_range")],
+    ])
+
+
+def get_need_urgency_keyboard() -> InlineKeyboardMarkup:
+    """Inline buttons to choose urgency."""
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text="Bình thường", callback_data="urg:normal"),
+            InlineKeyboardButton(text="Cần gấp ⚡", callback_data="urg:urgent"),
+            InlineKeyboardButton(text="Rất gấp 🔥", callback_data="urg:critical"),
+        ]
+    ])
+
+
+def get_offer_notification_keyboard(need_id: str) -> InlineKeyboardMarkup:
+    """
+    Buttons on notification sent to copy owners:
+    - Tôi có bản đầy đủ
+    - Tôi có một phần
+    - Sách sẽ có lại vào ngày...
+    - Giới thiệu nguồn
+    - Không thể hỗ trợ
+    - Tắt thông báo loại này
+    """
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text="📚 Tôi có bản đầy đủ", callback_data=f"off_f:{need_id}"),
+            InlineKeyboardButton(text="📑 Tôi có một phần", callback_data=f"off_p:{need_id}"),
+        ],
+        [
+            InlineKeyboardButton(text="⏳ Sắp có lại", callback_data=f"off_u:{need_id}"),
+            InlineKeyboardButton(text="🔗 Giới thiệu nguồn", callback_data=f"off_r:{need_id}"),
+        ],
+        [
+            InlineKeyboardButton(text="❌ Không thể hỗ trợ", callback_data=f"off_n:{need_id}"),
+            InlineKeyboardButton(text="🔕 Tắt thông báo", callback_data=f"off_m:{need_id}"),
+        ],
+    ])
+
+
+def get_book_chapters_keyboard(book_id: str, chapters: List[Dict[str, Any]], progress_entries: Optional[List[Dict[str, Any]]] = None) -> InlineKeyboardMarkup:
+    """Keyboard for displaying book chapters with reading status icons."""
+    state_map = {}
+    if progress_entries:
+        for p in progress_entries:
+            state_map[p["chapter_id"]] = p.get("reading_state", "not_started")
+
+    rows = []
+    for ch in chapters[:15]: # Show up to 15 chapters inline
+        cid = ch["id"]
+        st = state_map.get(cid, "not_started")
+        icon = "⚪"
+        if st == "completed":
+            icon = "✅"
+        elif st == "in_progress":
+            icon = "⏳"
+
+        label = f"{icon} {ch.get('chapter_code', ch.get('chapter_number', ''))}. {ch.get('title', 'Chương')}"
+        if len(label) > 35:
+            label = label[:32] + "..."
+        rows.append([InlineKeyboardButton(text=label, callback_data=f"ch_d:{book_id}:{cid}")])
+
+    # Action row
+    rows.append([
+        InlineKeyboardButton(text="📢 Cần chương sách", callback_data=f"req_ch:{book_id}"),
+        InlineKeyboardButton(text="📝 Đề xuất sửa", callback_data=f"prop_ch:{book_id}"),
+    ])
+    rows.append([
+        InlineKeyboardButton(text="📥 Xuất ghi chú", callback_data=f"exp_n:{book_id}"),
+        InlineKeyboardButton(text="⬅️ Thư viện", callback_data="lib:all"),
+    ])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def get_chapter_detail_keyboard(book_id: str, chapter_id: str, current_state: str) -> InlineKeyboardMarkup:
+    """Action keyboard for a specific chapter."""
+    state_btns = []
+    if current_state != "completed":
+        state_btns.append(InlineKeyboardButton(text="✅ Đã đọc xong", callback_data=f"set_st:{book_id}:{chapter_id}:completed"))
+    if current_state != "in_progress":
+        state_btns.append(InlineKeyboardButton(text="⏳ Đang đọc", callback_data=f"set_st:{book_id}:{chapter_id}:in_progress"))
+    if current_state != "not_started":
+        state_btns.append(InlineKeyboardButton(text="⚪ Chưa đọc", callback_data=f"set_st:{book_id}:{chapter_id}:not_started"))
+
+    return InlineKeyboardMarkup(inline_keyboard=[
+        state_btns,
+        [
+            InlineKeyboardButton(text="📢 Tôi cần chương này", callback_data=f"need_c:{book_id}:{chapter_id}"),
+            InlineKeyboardButton(text="🔔 Theo dõi nguồn", callback_data=f"wtch_c:{book_id}:{chapter_id}"),
+        ],
+        [
+            InlineKeyboardButton(text="⬅️ Danh mục chương", callback_data=f"ch_list:{book_id}"),
+        ],
+    ])
+
+
+
+def get_need_offer_actions_keyboard(offer_id: str) -> InlineKeyboardMarkup:
+    """Action buttons for requester viewing a support offer."""
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text="🤝 Chọn để mượn", callback_data=f"sel_o:{offer_id}"),
+            InlineKeyboardButton(text="❌ Từ chối", callback_data=f"dec_o:{offer_id}"),
+        ]
+    ])
+
+

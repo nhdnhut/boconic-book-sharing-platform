@@ -1,0 +1,6 @@
+title,author,isbn,publisher,quantity,barcode,condition,visibility
+Vật lí 12 - Kết nối tri thức,Vũ Văn Hùng,9786040388278,NXB Giáo dục Việt Nam,2,BAR_VATLI12_KNTT,like_new,published
+Hóa học 12 - Cánh diều,Trần Thành Huế,9786040388285,NXB Đại học Sư phạm,1,BAR_HOA12_CD,good,published
+Sinh học 12 - Chân trời sáng tạo,Phạm Văn Lập,9786040388292,NXB Giáo dục Việt Nam,1,BAR_SINH12_CTST,good,private
+Tiếng Anh 12 Global Success,Hoàng Văn Vân,9786040388308,NXB Giáo dục Việt Nam,3,BAR_ANH12_GS,new,published
+Lịch sử 12 - Hiện đại,Nguyễn Văn A,,NXB Giáo dục Việt Nam,1,BAR_SU12_HD,fair,private

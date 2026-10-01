@@ -35,6 +35,10 @@ class User(Base):
     owned_copies = relationship("BookCopy", foreign_keys="BookCopy.owner_id", back_populates="owner")
     borrow_requests = relationship("BorrowRequest", back_populates="borrower")
 
+    @property
+    def is_active(self) -> bool:
+        return self.status == "active"
+
 class UserLocation(Base):
     __tablename__ = "user_locations"
 
@@ -58,13 +62,23 @@ class UserSettings(Base):
     id = Column(String(36), primary_key=True, default=generate_uuid)
     user_id = Column(String(36), ForeignKey("users.id", ondelete="CASCADE"), unique=True, nullable=False)
     notify_matching = Column(Boolean, nullable=False, default=True)
+    notify_upcoming_need = Column(Boolean, nullable=False, default=True)
     notify_loan_updates = Column(Boolean, nullable=False, default=True)
     notify_reminders = Column(Boolean, nullable=False, default=True)
     quiet_hours_start = Column(Integer, nullable=True) # e.g. 22 (10 PM)
     quiet_hours_end = Column(Integer, nullable=True)   # e.g. 7 (7 AM)
+    snooze_until = Column(DateTime(timezone=True), nullable=True)
     updated_at = Column(DateTime(timezone=True), nullable=False, default=utc_now, onupdate=utc_now)
 
     user = relationship("User", back_populates="settings")
+
+    @property
+    def notify_book_requested(self) -> bool:
+        return self.notify_matching
+
+    @notify_book_requested.setter
+    def notify_book_requested(self, val: bool):
+        self.notify_matching = val
 
 class AdminAccount(Base):
     __tablename__ = "admin_accounts"

@@ -12,8 +12,15 @@ from app.admin.routes import router as admin_web_router
 from app.api.v1.admin_api import router as admin_api_router
 from app.api.v1.auth import router as admin_auth_router
 from app.api.v1.catalog import router as public_catalog_router
+from app.api.v1.community import (
+    collections_router,
+    community_library_router,
+    offers_action_router,
+    router as community_requests_router,
+)
 from app.api.v1.health import router as health_router
 from app.api.v1.internal_bot import router as internal_bot_router
+from app.api.v1.me import inventory_router, router as me_router
 from app.core.config import settings
 from app.core.errors import (
     BoconicException,
@@ -87,6 +94,16 @@ def create_app() -> FastAPI:
 
     # Public Discovery API (/api/v1/catalog)
     app.include_router(public_catalog_router, prefix="/api/v1")
+
+    # Community Requests & Offers API (/api/v1/community-requests, /api/v1/offers)
+    app.include_router(community_requests_router, prefix="/api/v1")
+    app.include_router(offers_action_router, prefix="/api/v1")
+    app.include_router(community_library_router, prefix="/api/v1")
+    app.include_router(collections_router, prefix="/api/v1")
+
+    # Personal Context & Inventory API (/api/v1/me, /api/v1/inventory)
+    app.include_router(me_router, prefix="/api/v1")
+    app.include_router(inventory_router, prefix="/api/v1")
 
     # Internal Bot Gateway API (/api/v1/internal/telegram)
     app.include_router(internal_bot_router, prefix="/api/v1")

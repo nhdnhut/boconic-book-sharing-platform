@@ -1,6 +1,28 @@
 import asyncio
 import sys
+import warnings
+
+warnings.filterwarnings("ignore", category=DeprecationWarning)
+
+if hasattr(sys.stdout, "reconfigure"):
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+if hasattr(sys.stderr, "reconfigure"):
+    try:
+        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+
+if sys.platform == "win32":
+    try:
+        asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+    except Exception:
+        pass
+
 from aiogram import Bot, Dispatcher
+from aiogram.client.session.aiohttp import AiohttpSession
 from aiogram.fsm.storage.memory import MemoryStorage
 
 from app.bot.handlers import router as bot_router
@@ -23,11 +45,16 @@ async def run_bot():
         return
 
     logger.info("Khởi động aiogram 3.x long polling cho Telegram Bot...")
-    bot = Bot(token=settings.BOT_TOKEN)
+    session = AiohttpSession(timeout=45.0)
+    bot = Bot(token=settings.BOT_TOKEN, session=session)
     dp = Dispatcher(storage=MemoryStorage())
     dp.include_router(bot_router)
 
     try:
+        me = await bot.get_me()
+        logger.info(f"Telegram Bot đã kết nối thành công: @{me.username} ({me.first_name}) [ID: {me.id}]")
+        logger.info(f"Super Admin Telegram ID được cấu hình: {settings.ADMIN_TELEGRAM_ID}")
+        await bot.delete_webhook(drop_pending_updates=False)
         await dp.start_polling(bot)
     finally:
         await bot.session.close()

@@ -10,7 +10,13 @@ if hasattr(sys.stdout, "reconfigure"):
 
 from sqlalchemy import select
 from app.db.models.catalog import Author, Book, BookAuthor, BookCopy, Chapter
-from app.db.models.community import CommunityRequest, Resource
+from app.db.models.community import (
+    AuthorizedCollection,
+    CollectionContribution,
+    CommunityRequest,
+    Resource,
+    UserWarning,
+)
 from app.db.models.identity import User, UserLocation
 from app.db.models.lending import BorrowRequest, Loan
 from app.db.models.organization import Organization
@@ -233,6 +239,207 @@ async def seed_demo():
             )
             db.add(resource2)
             await db.commit()
+
+        # 6. Create Demo Community Need & Support Offer
+        print("[6/8] Đang tạo nhu cầu tìm sách (Need) và đề nghị hỗ trợ (Offer)...")
+        from app.services.need_service import NeedService
+        book_math = created_books[0] if created_books else None
+        if book_math:
+            need_check = await db.execute(select(CommunityRequest).where(CommunityRequest.user_id == user_a.id))
+            if not need_check.scalar_one_or_none():
+                need = await NeedService.create_need(
+                    db=db,
+                    user_id=user_a.id,
+                    title_query=book_math.title,
+                    book_id=book_math.id,
+                    isbn=book_math.isbn13,
+                    edition_label=book_math.edition_label,
+                    scope_type="full_book",
+                    quantity=1,
+                    duration_days_needed=14,
+                    coarse_location="Quận 10, TP.HCM",
+                    urgency="urgent",
+                    urgency_reason="Cần ôn tập kiểm tra giữa kỳ",
+                    status="open",
+                )
+                await db.commit()
+
+                # Find User B's copy of math book
+                b_copies = await db.execute(
+                    select(BookCopy).where(BookCopy.book_id == book_math.id, BookCopy.owner_id == user_b.id)
+                )
+                copy_b = b_copies.scalars().first()
+                if copy_b:
+                    await NeedService.create_offer(
+                        db=db,
+                        need_id=need.id,
+                        provider_user_id=user_b.id,
+                        offer_type="full_physical_copy",
+                        copy_id=copy_b.id,
+                        proposed_duration_days=14,
+                        coarse_pickup_area="Khu vực ĐH Bách Khoa / Quận 10",
+                        message="Mình có sách đầy đủ, bạn có thể ghé lấy bất cứ lúc nào!",
+                    )
+                    await db.commit()
+
+        # 7. Create Demo Partial Photocopy Holding & Coverage
+        print("[7/8] Đang tạo tài liệu photocopy một phần & khoảng trang...")
+        from app.db.models.catalog import CopyCoverageRange
+        if book_math:
+            partial_check = await db.execute(select(CopyCoverageRange))
+            if not partial_check.scalar_one_or_none():
+                part_copy = await CatalogService.add_book_copy(
+                    db=db,
+                    book_id=book_math.id,
+                    owner_id=user_b.id,
+                    condition="good",
+                    barcode="PHOTO_TOAN12_CH1",
+                    visibility="private",
+                    format_type="partial_photocopy",
+                    is_partial=True,
+                    coverage_summary={"ranges": [[1, 30]], "chapters": ["Chương 1: Ứng dụng đạo hàm"]},
+                )
+                cov_range = CopyCoverageRange(
+                    copy_id=part_copy.id,
+                    start_page=1,
+                    end_page=30,
+                    pagination_basis="edition_2024",
+                    chapters=["Chương 1: Ứng dụng đạo hàm"],
+                    source_description="Bản photocopy bài tập cá nhân tự in",
+                    verification_status="verified",
+                )
+                db.add(cov_range)
+                await db.commit()
+
+        # 8. Create Demo Authorized Collection & Warning
+        print("[8/8] Đang tạo Authorized Collection & Cảnh báo người dùng mẫu...")
+        from app.services.assembly_service import AssemblyService
+        from app.services.warning_service import WarningService
+        if book_math:
+            col_check = await db.execute(select(AuthorizedCollection))
+            if not col_check.scalar_one_or_none():
+                col = await AssemblyService.create_collection(
+                    db=db,
+                    book_id=book_math.id,
+                    title="Tuyển tập Chuyên đề Ôn thi THPT Môn Toán [Open CC-BY-NC]",
+                    target_scope={"start_page": 1, "end_page": 50},
+                    rights_basis="Creative Commons CC-BY-NC 4.0 - Được tác giả đồng ý chia sẻ học liệu",
+                    allowed_actions=["receive", "aggregate", "distribute_file"],
+                    recipient_scope="community",
+                    created_by=user_a.id,
+                )
+                await AssemblyService.verify_collection(db, col.id, verifier_id=user_a.id, status="active")
+
+                await AssemblyService.submit_contribution(
+                    db,
+                    collection_id=col.id,
+                    contributor_id=user_b.id,
+                    start_page=1,
+                    end_page=25,
+                    source_type="digital_pdf",
+                    checksum_sha256="7a8f9b0c1d2e3f4a5b6c7d8e9f0a1b2c3d4e5f6a",
+                    consent_given=True,
+                )
+                await db.commit()
+
+            warn_check = await db.execute(select(UserWarning))
+            if not warn_check.scalar_one_or_none():
+                await WarningService.issue_warning(
+                    db=db,
+                    subject_user_id=user_b.id,
+                    category="rights_review",
+                    severity="info",
+                    message="Bạn đã khai báo một phần tài liệu. Hãy lưu ý giữ ở chế độ Riêng tư nếu chưa có bản quyền phát hành công khai.",
+                    reason="Chính sách bản quyền Mục 2 Boconic",
+                    issued_by="admin_system",
+                )
+                await db.commit()
+
+            # 5. Seed Demo Chapters & Study Progress
+            print("[5/5] Đang tạo danh mục chương, đề xuất và tiến độ học cá nhân...")
+            from app.services.chapter_service import ChapterService
+            ch_check = await db.execute(select(Chapter).where(Chapter.book_id == book_math.id))
+            ch_list = ch_check.scalars().all()
+            if not ch_list:
+                ch1 = Chapter(
+                    book_id=book_math.id,
+                    chapter_number=1,
+                    chapter_code="1",
+                    order_index=1,
+                    title="Ứng dụng đạo hàm để khảo sát hàm số",
+                    page_start=1,
+                    page_end=45,
+                    pagination_basis="edition_page_numbers",
+                    topics=["Đạo hàm", "Khảo sát hàm số"],
+                    verification_status="verified",
+                    version=1,
+                )
+                ch2 = Chapter(
+                    book_id=book_math.id,
+                    chapter_number=2,
+                    chapter_code="2",
+                    order_index=2,
+                    title="Hàm số lũy thừa, mũ và logarit",
+                    page_start=46,
+                    page_end=90,
+                    pagination_basis="edition_page_numbers",
+                    topics=["Lũy thừa", "Mũ", "Logarit"],
+                    verification_status="verified",
+                    version=1,
+                )
+                ch3 = Chapter(
+                    book_id=book_math.id,
+                    chapter_number=3,
+                    chapter_code="3",
+                    order_index=3,
+                    title="Nguyên hàm, tích phân và ứng dụng",
+                    page_start=91,
+                    page_end=140,
+                    pagination_basis="edition_page_numbers",
+                    topics=["Nguyên hàm", "Tích phân"],
+                    verification_status="verified",
+                    version=1,
+                )
+                db.add_all([ch1, ch2, ch3])
+                await db.flush()
+
+                # User A personal study progress
+                await ChapterService.update_chapter_progress(
+                    db=db,
+                    user_id=user_a.id,
+                    book_id=book_math.id,
+                    chapter_id=ch1.id,
+                    reading_state="completed",
+                )
+                await ChapterService.update_chapter_progress(
+                    db=db,
+                    user_id=user_a.id,
+                    book_id=book_math.id,
+                    chapter_id=ch2.id,
+                    reading_state="in_progress",
+                    bookmark_page=65,
+                    bookmark_note="Công thức đổi cơ số logarit",
+                    personal_notes="Cần giải thêm 10 bài tập đồ thị mũ và logarit phần nâng cao.",
+                )
+
+                # User B creates a chapter proposal
+                await ChapterService.create_chapter_proposal(
+                    db=db,
+                    user_id=user_b.id,
+                    book_id=book_math.id,
+                    action="create",
+                    proposed_data={
+                        "title": "Phụ lục: Hướng dẫn giải đề thi mẫu",
+                        "chapter_number": 4,
+                        "chapter_code": "Phụ lục",
+                        "order_index": 4,
+                        "page_start": 141,
+                        "page_end": 170,
+                        "topics": ["Đề thi", "Ôn tập"],
+                    },
+                    reason="Bản in có kèm phần bài tập mở rộng ở cuối sách",
+                )
+                await db.commit()
 
     print("\n==================================================")
     print("     DỮ LIỆU MẪU ĐÃ ĐƯỢC KHỞI TẠO THÀNH CÔNG!     ")

@@ -11,17 +11,29 @@ from sqlalchemy.orm import selectinload
 
 from app.core.config import settings
 from app.core.security import generate_session_token, generate_csrf_token, verify_password
-from app.db.models.catalog import Author, Book, BookAuthor, BookCopy
-from app.db.models.community import CommunityRequest, Report
+from app.db.models.catalog import Author, Book, BookAuthor, BookCopy, CopyCoverageRange, Chapter, ChapterProposal
+from app.db.models.community import (
+    AuthorizedCollection,
+    CommunityRequest,
+    Report,
+    RequestMatch,
+    SupportOffer,
+    UserWarning,
+)
 from app.db.models.custom_fields import CustomFieldDefinition
 from app.db.models.identity import AdminAccount, AdminSession, User
-from app.db.models.jobs import AuditLog, BackupJob, ImportJob
+from app.db.models.jobs import AuditLog, BackupJob, ImportJob, OutboxEvent
 from app.db.models.lending import Loan
 from app.db.session import get_db
+from app.services.assembly_service import AssemblyService
 from app.services.audit import AuditService
 from app.services.backup import BackupService
 from app.services.catalog import CatalogService
+from app.services.chapter_service import ChapterService
+from app.services.coverage_service import CoverageService
 from app.services.import_export import ImportExportService
+from app.services.need_service import NeedService
+from app.services.warning_service import WarningService
 
 TEMPLATES_DIR = Path(__file__).resolve().parent / "templates"
 templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
@@ -478,6 +490,520 @@ async def create_backup_submit(
     await BackupService.create_backup(db, created_by=admin.id)
     await db.commit()
     return RedirectResponse(url="/admin/backups", status_code=303)
+
+
+# ==========================================
+# REQUESTS & OFFERS ADMIN OPERATIONS
+# ==========================================
+
+@router.get("/requests", response_class=HTMLResponse)
+async def admin_requests_page(
+    request: Request,
+    status: Optional[str] = Query(None),
+    boconic_session: Optional[str] = Cookie(None),
+    db: AsyncSession = Depends(get_db),
+):
+    admin = await get_optional_admin(boconic_session, db)
+    if not admin:
+        return RedirectResponse(url="/admin/login", status_code=303)
+
+    stmt = select(CommunityRequest, User.public_alias).join(User, CommunityRequest.user_id == User.id)
+    if status:
+        stmt = stmt.where(CommunityRequest.status == status)
+    stmt = stmt.order_by(desc(CommunityRequest.created_at))
+    res = await db.execute(stmt)
+    rows = res.all()
+
+    requests_data = []
+    for req, alias in rows:
+        m_count = (await db.execute(select(func.count(RequestMatch.id)).where(RequestMatch.need_id == req.id))).scalar_one() or 0
+        o_count = (await db.execute(select(func.count(SupportOffer.id)).where(SupportOffer.need_id == req.id))).scalar_one() or 0
+        requests_data.append((req, alias, m_count, o_count))
+
+    return templates.TemplateResponse(
+        request,
+        "requests.html",
+        {
+            "admin": admin,
+            "requests": requests_data,
+            "current_status": status,
+            "active_nav": "requests",
+        },
+    )
+
+
+@router.post("/requests/{need_id}/rematch", response_class=HTMLResponse)
+async def admin_rematch_need(
+    need_id: str,
+    boconic_session: Optional[str] = Cookie(None),
+    db: AsyncSession = Depends(get_db),
+):
+    admin = await get_optional_admin(boconic_session, db)
+    if not admin:
+        return RedirectResponse(url="/admin/login", status_code=303)
+
+    await NeedService.match_need_with_owners(db, need_id)
+    await db.commit()
+    return RedirectResponse(url="/admin/requests", status_code=303)
+
+
+@router.post("/requests/{need_id}/cancel", response_class=HTMLResponse)
+async def admin_cancel_need(
+    need_id: str,
+    boconic_session: Optional[str] = Cookie(None),
+    db: AsyncSession = Depends(get_db),
+):
+    admin = await get_optional_admin(boconic_session, db)
+    if not admin:
+        return RedirectResponse(url="/admin/login", status_code=303)
+
+    need = await db.get(CommunityRequest, need_id)
+    if need:
+        need.status = "cancelled"
+        await db.commit()
+    return RedirectResponse(url="/admin/requests", status_code=303)
+
+
+# ==========================================
+# INVENTORY & PARTIAL MATERIALS ADMIN
+# ==========================================
+
+@router.get("/inventory", response_class=HTMLResponse)
+async def admin_inventory_page(
+    request: Request,
+    visibility: Optional[str] = Query(None),
+    format: Optional[str] = Query(None),
+    boconic_session: Optional[str] = Cookie(None),
+    db: AsyncSession = Depends(get_db),
+):
+    admin = await get_optional_admin(boconic_session, db)
+    if not admin:
+        return RedirectResponse(url="/admin/login", status_code=303)
+
+    owner_user = select(User.id, User.public_alias).subquery("owner_user")
+    holder_user = select(User.id, User.public_alias).subquery("holder_user")
+
+    stmt = (
+        select(
+            BookCopy,
+            Book,
+            owner_user.c.public_alias.label("owner_alias"),
+            holder_user.c.public_alias.label("holder_alias"),
+        )
+        .join(Book, BookCopy.book_id == Book.id)
+        .outerjoin(owner_user, BookCopy.owner_id == owner_user.c.id)
+        .outerjoin(holder_user, BookCopy.current_holder_id == holder_user.c.id)
+    )
+    if visibility:
+        stmt = stmt.where(BookCopy.visibility == visibility)
+    if format:
+        stmt = stmt.where(BookCopy.format == format)
+
+    stmt = stmt.order_by(desc(BookCopy.created_at))
+    res = await db.execute(stmt)
+    copies = res.all()
+
+    return templates.TemplateResponse(
+        request,
+        "inventory.html",
+        {
+            "admin": admin,
+            "copies": copies,
+            "current_vis": visibility,
+            "current_format": format,
+            "active_nav": "inventory",
+        },
+    )
+
+
+@router.get("/partial-materials", response_class=HTMLResponse)
+async def admin_partial_materials_page(
+    request: Request,
+    boconic_session: Optional[str] = Cookie(None),
+    db: AsyncSession = Depends(get_db),
+):
+    admin = await get_optional_admin(boconic_session, db)
+    if not admin:
+        return RedirectResponse(url="/admin/login", status_code=303)
+
+    stmt = (
+        select(CopyCoverageRange, BookCopy, Book, User.public_alias)
+        .join(BookCopy, CopyCoverageRange.copy_id == BookCopy.id)
+        .join(Book, BookCopy.book_id == Book.id)
+        .join(User, BookCopy.owner_id == User.id)
+        .order_by(desc(CopyCoverageRange.created_at))
+    )
+    res = await db.execute(stmt)
+    partial_items = res.all()
+
+    return templates.TemplateResponse(
+        request,
+        "partial_materials.html",
+        {
+            "admin": admin,
+            "partial_items": partial_items,
+            "active_nav": "partial_materials",
+        },
+    )
+
+
+@router.post("/partial-materials/{range_id}/verify", response_class=HTMLResponse)
+async def admin_verify_partial_material(
+    range_id: str,
+    boconic_session: Optional[str] = Cookie(None),
+    db: AsyncSession = Depends(get_db),
+):
+    admin = await get_optional_admin(boconic_session, db)
+    if not admin:
+        return RedirectResponse(url="/admin/login", status_code=303)
+
+    r_item = await db.get(CopyCoverageRange, range_id)
+    if r_item:
+        r_item.verification_status = "verified"
+        await db.commit()
+    return RedirectResponse(url="/admin/partial-materials", status_code=303)
+
+
+@router.post("/partial-materials/{range_id}/reject", response_class=HTMLResponse)
+async def admin_reject_partial_material(
+    range_id: str,
+    boconic_session: Optional[str] = Cookie(None),
+    db: AsyncSession = Depends(get_db),
+):
+    admin = await get_optional_admin(boconic_session, db)
+    if not admin:
+        return RedirectResponse(url="/admin/login", status_code=303)
+
+    r_item = await db.get(CopyCoverageRange, range_id)
+    if r_item:
+        r_item.verification_status = "rejected"
+        await db.commit()
+    return RedirectResponse(url="/admin/partial-materials", status_code=303)
+
+
+# ==========================================
+# AUTHORIZED COLLECTIONS ADMIN
+# ==========================================
+
+@router.get("/collections", response_class=HTMLResponse)
+async def admin_collections_page(
+    request: Request,
+    boconic_session: Optional[str] = Cookie(None),
+    db: AsyncSession = Depends(get_db),
+):
+    admin = await get_optional_admin(boconic_session, db)
+    if not admin:
+        return RedirectResponse(url="/admin/login", status_code=303)
+
+    stmt = select(AuthorizedCollection, Book).join(Book, AuthorizedCollection.book_id == Book.id).order_by(desc(AuthorizedCollection.created_at))
+    res = await db.execute(stmt)
+    collections = res.all()
+
+    return templates.TemplateResponse(
+        request,
+        "collections.html",
+        {
+            "admin": admin,
+            "collections": collections,
+            "active_nav": "collections",
+        },
+    )
+
+
+@router.post("/collections/{col_id}/assemble", response_class=HTMLResponse)
+async def admin_assemble_collection(
+    col_id: str,
+    boconic_session: Optional[str] = Cookie(None),
+    db: AsyncSession = Depends(get_db),
+):
+    admin = await get_optional_admin(boconic_session, db)
+    if not admin:
+        return RedirectResponse(url="/admin/login", status_code=303)
+
+    await AssemblyService.run_assembly_job(db, col_id, requested_by=admin.id)
+    await db.commit()
+    return RedirectResponse(url="/admin/collections", status_code=303)
+
+
+# ==========================================
+# MODERATION & WARNINGS ADMIN
+# ==========================================
+
+@router.get("/moderation", response_class=HTMLResponse)
+async def admin_moderation_page(
+    request: Request,
+    boconic_session: Optional[str] = Cookie(None),
+    db: AsyncSession = Depends(get_db),
+):
+    admin = await get_optional_admin(boconic_session, db)
+    if not admin:
+        return RedirectResponse(url="/admin/login", status_code=303)
+
+    stmt = select(UserWarning, User.public_alias).join(User, UserWarning.subject_user_id == User.id).order_by(desc(UserWarning.created_at))
+    res = await db.execute(stmt)
+    warnings = res.all()
+
+    return templates.TemplateResponse(
+        request,
+        "moderation.html",
+        {
+            "admin": admin,
+            "warnings": warnings,
+            "active_nav": "moderation",
+        },
+    )
+
+
+@router.post("/warnings/issue", response_class=HTMLResponse)
+async def admin_issue_warning(
+    user_id: str = Form(...),
+    category: str = Form(...),
+    severity: str = Form(...),
+    message: str = Form(...),
+    reason: str = Form(...),
+    boconic_session: Optional[str] = Cookie(None),
+    db: AsyncSession = Depends(get_db),
+):
+    admin = await get_optional_admin(boconic_session, db)
+    if not admin:
+        return RedirectResponse(url="/admin/login", status_code=303)
+
+    await WarningService.issue_warning(
+        db=db,
+        subject_user_id=user_id.strip(),
+        category=category,
+        severity=severity,
+        message=message,
+        reason=reason,
+        issued_by=admin.id,
+    )
+    await db.commit()
+    return RedirectResponse(url="/admin/moderation", status_code=303)
+
+
+@router.post("/warnings/{warning_id}/appeal/accept", response_class=HTMLResponse)
+async def admin_accept_appeal(
+    warning_id: str,
+    boconic_session: Optional[str] = Cookie(None),
+    db: AsyncSession = Depends(get_db),
+):
+    admin = await get_optional_admin(boconic_session, db)
+    if not admin:
+        return RedirectResponse(url="/admin/login", status_code=303)
+
+    await WarningService.review_appeal(db, warning_id, moderator_id=admin.id, decision="accepted")
+    await db.commit()
+    return RedirectResponse(url="/admin/moderation", status_code=303)
+
+
+@router.post("/warnings/{warning_id}/appeal/reject", response_class=HTMLResponse)
+async def admin_reject_appeal(
+    warning_id: str,
+    boconic_session: Optional[str] = Cookie(None),
+    db: AsyncSession = Depends(get_db),
+):
+    admin = await get_optional_admin(boconic_session, db)
+    if not admin:
+        return RedirectResponse(url="/admin/login", status_code=303)
+
+    await WarningService.review_appeal(db, warning_id, moderator_id=admin.id, decision="rejected")
+    await db.commit()
+    return RedirectResponse(url="/admin/moderation", status_code=303)
+
+
+# ==========================================
+# ANALYTICS & JOBS ADMIN
+# ==========================================
+
+@router.get("/analytics", response_class=HTMLResponse)
+async def admin_analytics_page(
+    request: Request,
+    boconic_session: Optional[str] = Cookie(None),
+    db: AsyncSession = Depends(get_db),
+):
+    admin = await get_optional_admin(boconic_session, db)
+    if not admin:
+        return RedirectResponse(url="/admin/login", status_code=303)
+
+    total_needs = (await db.execute(select(func.count(CommunityRequest.id)))).scalar_one() or 0
+    open_needs = (await db.execute(select(func.count(CommunityRequest.id)).where(CommunityRequest.status == "open"))).scalar_one() or 0
+    fulfilled_needs = (await db.execute(select(func.count(CommunityRequest.id)).where(CommunityRequest.status == "fulfilled"))).scalar_one() or 0
+
+    total_offers = (await db.execute(select(func.count(SupportOffer.id)))).scalar_one() or 0
+    selected_offers = (await db.execute(select(func.count(SupportOffer.id)).where(SupportOffer.status.in_(["selected", "fulfilled"])))).scalar_one() or 0
+    selection_rate = round((selected_offers / total_offers * 100.0), 1) if total_offers > 0 else 0.0
+
+    matched_owners_count = (await db.execute(select(func.count(RequestMatch.id)))).scalar_one() or 0
+    notified_count = (await db.execute(select(func.count(RequestMatch.id)).where(RequestMatch.notification_status == "sent"))).scalar_one() or 0
+
+    active_loans = (await db.execute(select(func.count(Loan.id)).where(Loan.status.in_(["reserved", "active", "return_pending"])))).scalar_one() or 0
+    now = datetime.datetime.now(datetime.timezone.utc)
+    overdue_loans = (await db.execute(select(func.count(Loan.id)).where(Loan.status == "active", Loan.due_at < now))).scalar_one() or 0
+
+    total_warnings = (await db.execute(select(func.count(UserWarning.id)))).scalar_one() or 0
+    rights_warnings = (await db.execute(select(func.count(UserWarning.id)).where(UserWarning.category == "rights_review"))).scalar_one() or 0
+    pending_appeals = (await db.execute(select(func.count(UserWarning.id)).where(UserWarning.appeal_status == "pending"))).scalar_one() or 0
+    active_collections = (await db.execute(select(func.count(AuthorizedCollection.id)).where(AuthorizedCollection.status == "active"))).scalar_one() or 0
+
+    fulfillment_rate = round((fulfilled_needs / total_needs * 100.0), 1) if total_needs > 0 else 0.0
+
+    stats = {
+        "total_needs": total_needs,
+        "open_needs": open_needs,
+        "fulfilled_needs": fulfilled_needs,
+        "total_offers": total_offers,
+        "selected_offers": selected_offers,
+        "selection_rate": selection_rate,
+        "matched_owners_count": matched_owners_count,
+        "notified_count": notified_count,
+        "active_loans": active_loans,
+        "overdue_loans": overdue_loans,
+        "total_warnings": total_warnings,
+        "rights_warnings": rights_warnings,
+        "pending_appeals": pending_appeals,
+        "active_collections": active_collections,
+        "fulfillment_rate": fulfillment_rate,
+    }
+
+    return templates.TemplateResponse(
+        request,
+        "analytics.html",
+        {
+            "admin": admin,
+            "stats": stats,
+            "active_nav": "analytics",
+        },
+    )
+
+
+@router.get("/chapter-proposals", response_class=HTMLResponse)
+async def list_chapter_proposals(
+    request: Request,
+    status: str = Query("all"),
+    boconic_session: Optional[str] = Cookie(None),
+    db: AsyncSession = Depends(get_db),
+):
+    admin = await get_optional_admin(boconic_session, db)
+    if not admin:
+        return RedirectResponse(url="/admin/login", status_code=303)
+
+    query = select(ChapterProposal).options(
+        selectinload(ChapterProposal.book),
+        selectinload(ChapterProposal.chapter),
+        selectinload(ChapterProposal.proposer),
+    ).order_by(desc(ChapterProposal.created_at))
+
+    if status != "all":
+        query = query.where(ChapterProposal.status == status)
+
+    res = await db.execute(query)
+    proposals = list(res.scalars().all())
+
+    return templates.TemplateResponse(
+        request,
+        "chapter_proposals.html",
+        {
+            "admin": admin,
+            "proposals": proposals,
+            "current_status": status,
+            "active_nav": "chapter_proposals",
+        },
+    )
+
+
+@router.post("/chapter-proposals/{proposal_id}/review")
+async def review_chapter_proposal(
+    proposal_id: str,
+    action: str = Form(...), # approve or reject
+    review_notes: Optional[str] = Form(None),
+    boconic_session: Optional[str] = Cookie(None),
+    db: AsyncSession = Depends(get_db),
+):
+    admin = await get_optional_admin(boconic_session, db)
+    if not admin:
+        return RedirectResponse(url="/admin/login", status_code=303)
+
+    is_approved = (action == "approve")
+    await ChapterService.review_chapter_proposal(
+        db=db,
+        proposal_id=proposal_id,
+        reviewer_id=admin.username,
+        approved=is_approved,
+        review_notes=review_notes,
+    )
+    await db.commit()
+    return RedirectResponse(url="/admin/chapter-proposals", status_code=303)
+
+
+@router.get("/process-audit", response_class=HTMLResponse)
+async def process_audit_dashboard(
+    request: Request,
+    boconic_session: Optional[str] = Cookie(None),
+    db: AsyncSession = Depends(get_db),
+):
+    admin = await get_optional_admin(boconic_session, db)
+    if not admin:
+        return RedirectResponse(url="/admin/login", status_code=303)
+
+    # Revalidation needs
+    reval_res = await db.execute(
+        select(CommunityRequest).options(
+            selectinload(CommunityRequest.user)
+        ).where(CommunityRequest.revalidation_required == True)
+    )
+    revalidation_needs = list(reval_res.scalars().all())
+
+    # Pending proposals
+    pending_prop_res = await db.execute(
+        select(func.count(ChapterProposal.id)).where(ChapterProposal.status == "pending")
+    )
+    pending_proposals_count = pending_prop_res.scalar_one() or 0
+
+    # Active and overdue loans
+    now = datetime.datetime.now(datetime.timezone.utc)
+    active_loans_count = (await db.execute(select(func.count(Loan.id)).where(Loan.status == "active"))).scalar_one() or 0
+    overdue_loans_count = (await db.execute(select(func.count(Loan.id)).where(Loan.status == "active", Loan.due_at < now))).scalar_one() or 0
+
+    # Outbox events
+    pending_outbox_count = (await db.execute(select(func.count(OutboxEvent.id)).where(OutboxEvent.processed_at.is_(None)))).scalar_one() or 0
+    recent_outbox_res = await db.execute(
+        select(OutboxEvent).order_by(desc(OutboxEvent.created_at)).limit(25)
+    )
+    recent_outbox = list(recent_outbox_res.scalars().all())
+
+    return templates.TemplateResponse(
+        request,
+        "process_audit.html",
+        {
+            "admin": admin,
+            "revalidation_needs": revalidation_needs,
+            "pending_proposals_count": pending_proposals_count,
+            "active_loans_count": active_loans_count,
+            "overdue_loans_count": overdue_loans_count,
+            "pending_outbox_count": pending_outbox_count,
+            "recent_outbox": recent_outbox,
+            "active_nav": "process_audit",
+        },
+    )
+
+
+@router.post("/process-audit/resolve-revalidation/{need_id}")
+async def resolve_need_revalidation(
+    need_id: str,
+    boconic_session: Optional[str] = Cookie(None),
+    db: AsyncSession = Depends(get_db),
+):
+    admin = await get_optional_admin(boconic_session, db)
+    if not admin:
+        return RedirectResponse(url="/admin/login", status_code=303)
+
+    need = await db.get(CommunityRequest, need_id)
+    if need:
+        need.revalidation_required = False
+        await db.commit()
+
+    return RedirectResponse(url="/admin/process-audit", status_code=303)
+
 
 @router.get("/logout", response_class=HTMLResponse)
 @router.post("/logout", response_class=HTMLResponse)

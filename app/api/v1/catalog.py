@@ -145,3 +145,136 @@ async def list_verified_resources(db: AsyncSession = Depends(get_db)):
         }
         for r in resources
     ]
+
+
+class ChapterProposalCreateDTO(BaseModel):
+    user_id: str
+    action: str = "create" # create, update, delete, reorder
+    base_version: int = 1
+    proposed_data: Dict[str, Any]
+    reason: str
+    source_evidence: Optional[str] = None
+    chapter_id: Optional[str] = None
+
+
+class ChapterResourceCreateDTO(BaseModel):
+    user_id: str
+    title: str
+    resource_type: str = "link"
+    url: Optional[str] = None
+    file_path: Optional[str] = None
+    page_start: Optional[int] = None
+    page_end: Optional[int] = None
+    rights_basis: str = "personal_fair_use"
+    allowed_actions: Optional[List[str]] = None
+
+
+class ChapterWatchDTO(BaseModel):
+    user_id: str
+    notify_preference: str = "all"
+
+
+@router.get("/books/{book_id}/chapters")
+async def get_book_chapters(
+    book_id: str,
+    include_archived: bool = Query(False),
+    db: AsyncSession = Depends(get_db),
+):
+    """Retrieve canonical chapters for a specific book edition."""
+    from app.services.chapter_service import ChapterService
+    return await ChapterService.get_book_chapters(db, book_id=book_id, include_archived=include_archived)
+
+
+@router.post("/books/{book_id}/chapter-proposals")
+async def create_chapter_proposal(
+    book_id: str,
+    dto: ChapterProposalCreateDTO,
+    db: AsyncSession = Depends(get_db),
+):
+    """Submit a proposal to add, update, delete or reorder chapters."""
+    from app.services.chapter_service import ChapterService
+    proposal = await ChapterService.create_chapter_proposal(
+        db=db,
+        user_id=dto.user_id,
+        book_id=book_id,
+        action=dto.action,
+        proposed_data=dto.proposed_data,
+        reason=dto.reason,
+        source_evidence=dto.source_evidence,
+        chapter_id=dto.chapter_id,
+        base_version=dto.base_version,
+    )
+    await db.commit()
+    return {
+        "status": "success",
+        "proposal_id": proposal.id,
+        "action": proposal.action,
+        "proposal_status": proposal.status,
+    }
+
+
+@router.post("/chapters/{chapter_id}/resources")
+async def add_chapter_resource(
+    chapter_id: str,
+    dto: ChapterResourceCreateDTO,
+    db: AsyncSession = Depends(get_db),
+):
+    """Add a digital resource to a chapter (quarantined by default pending rights review)."""
+    from app.services.chapter_service import ChapterService
+    resource = await ChapterService.add_chapter_resource(
+        db=db,
+        user_id=dto.user_id,
+        chapter_id=chapter_id,
+        title=dto.title,
+        resource_type=dto.resource_type,
+        url=dto.url,
+        file_path=dto.file_path,
+        page_start=dto.page_start,
+        page_end=dto.page_end,
+        rights_basis=dto.rights_basis,
+        allowed_actions=dto.allowed_actions,
+    )
+    await db.commit()
+    return {
+        "status": "success",
+        "resource_id": resource.id,
+        "verification_status": resource.verification_status,
+        "is_public": resource.is_public,
+    }
+
+
+@router.post("/chapters/{chapter_id}/watch")
+async def watch_chapter(
+    chapter_id: str,
+    book_id: str = Query(..., description="Book ID"),
+    dto: ChapterWatchDTO = Depends(),
+    db: AsyncSession = Depends(get_db),
+):
+    """Subscribe to alerts when new sources become available for a missing chapter."""
+    from app.services.chapter_service import ChapterService
+    watch = await ChapterService.watch_chapter(
+        db=db,
+        user_id=dto.user_id,
+        book_id=book_id,
+        chapter_id=chapter_id,
+        notify_preference=dto.notify_preference,
+    )
+    await db.commit()
+    return {"status": "success", "is_active": watch.is_active}
+
+
+@router.delete("/chapters/{chapter_id}/watch")
+async def unwatch_chapter(
+    chapter_id: str,
+    book_id: str = Query(...),
+    user_id: str = Query(...),
+    db: AsyncSession = Depends(get_db),
+):
+    """Unsubscribe from chapter alerts."""
+    from app.services.chapter_service import ChapterService
+    success = await ChapterService.unwatch_chapter(
+        db=db, user_id=user_id, book_id=book_id, chapter_id=chapter_id
+    )
+    await db.commit()
+    return {"status": "success", "unwatched": success}
+

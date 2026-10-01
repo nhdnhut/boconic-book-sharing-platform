@@ -120,6 +120,12 @@ class CatalogService:
         lending_policy: str = "free_return",
         storage_location_private: Optional[str] = None,
         notes: Optional[str] = None,
+        barcode: Optional[str] = None,
+        visibility: str = "published",
+        format_type: str = "physical",
+        is_partial: bool = False,
+        available_from: Optional[Any] = None,
+        coverage_summary: Optional[Dict[str, Any]] = None,
         custom_data: Optional[Dict[str, Any]] = None,
     ) -> BookCopy:
         book = await db.get(Book, book_id)
@@ -131,7 +137,8 @@ class CatalogService:
             )
 
         public_code = generate_public_copy_code()
-        # Verify unique public_code
+        c_data = dict(custom_data or {})
+        c_data["barcode"] = barcode.strip() if barcode else public_code
         copy = BookCopy(
             book_id=book_id,
             owner_id=owner_id,
@@ -139,11 +146,16 @@ class CatalogService:
             public_code=public_code,
             condition=condition,
             circulation_status="available",
+            visibility=visibility,
+            format=format_type,
+            is_partial=is_partial,
+            available_from=available_from,
+            coverage_summary=coverage_summary or {},
             maximum_loan_days=maximum_loan_days,
             lending_policy=lending_policy,
             storage_location_private=storage_location_private,
             notes=notes,
-            custom_data=custom_data or {},
+            custom_data=c_data,
         )
         db.add(copy)
         await db.flush()

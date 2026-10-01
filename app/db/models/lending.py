@@ -21,6 +21,8 @@ class BorrowRequest(Base):
     id = Column(String(36), primary_key=True, default=generate_uuid)
     copy_id = Column(String(36), ForeignKey("book_copies.id", ondelete="CASCADE"), nullable=False, index=True)
     borrower_id = Column(String(36), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    need_id = Column(String(36), ForeignKey("community_requests.id", ondelete="SET NULL"), nullable=True, index=True)
+    offer_id = Column(String(36), ForeignKey("support_offers.id", ondelete="SET NULL"), nullable=True, index=True)
     duration_days = Column(Integer, nullable=False, default=14)
     note = Column(Text, nullable=True)
     status = Column(String(32), nullable=False, default="pending", index=True) # pending, accepted, rejected, cancelled, expired
@@ -31,6 +33,8 @@ class BorrowRequest(Base):
     copy = relationship("BookCopy", back_populates="borrow_requests")
     borrower = relationship("User", back_populates="borrow_requests")
     loan = relationship("Loan", back_populates="request", uselist=False)
+    need = relationship("CommunityRequest")
+    offer = relationship("SupportOffer")
 
 class Loan(Base):
     __tablename__ = "loans"

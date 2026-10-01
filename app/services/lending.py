@@ -195,6 +195,46 @@ class LendingService:
         return loan
 
     @classmethod
+    async def reject_borrow_request(
+        cls,
+        db: AsyncSession,
+        request_id: str,
+        owner_id: str,
+        reason: Optional[str] = None,
+    ) -> BorrowRequest:
+        req = await db.get(BorrowRequest, request_id)
+        if not req or req.status != "pending":
+            raise BoconicException(
+                code=ErrorCode.INVALID_STATE,
+                message="Yêu cầu mượn không tồn tại hoặc đã được xử lý.",
+                status_code=409,
+            )
+
+        copy = await db.get(BookCopy, req.copy_id)
+        if not copy:
+            raise BoconicException(code=ErrorCode.NOT_FOUND, message="Không tìm thấy bản sách.", status_code=404)
+
+        if copy.owner_id != owner_id and copy.current_holder_id != owner_id:
+            raise BoconicException(code=ErrorCode.FORBIDDEN, message="Bạn không có quyền quản lý bản sách này.", status_code=403)
+
+        req.status = "rejected"
+
+        outbox = OutboxEvent(
+            event_type="REQUEST_REJECTED",
+            aggregate_type="borrow_request",
+            aggregate_id=req.id,
+            payload={
+                "request_id": req.id,
+                "borrower_id": req.borrower_id,
+                "owner_id": owner_id,
+                "reason": reason,
+            },
+        )
+        db.add(outbox)
+        await db.flush()
+        return req
+
+    @classmethod
     async def confirm_handover(
         cls,
         db: AsyncSession,
@@ -301,6 +341,24 @@ class LendingService:
                 },
             )
             db.add(outbox)
+
+            # If linked to a BorrowRequest with need_id or offer_id, update fulfillment
+            if loan.request_id:
+                borrow_req = await db.get(BorrowRequest, loan.request_id)
+                if borrow_req:
+                    if borrow_req.offer_id:
+                        from app.db.models.community import SupportOffer
+                        offer = await db.get(SupportOffer, borrow_req.offer_id)
+                        if offer:
+                            offer.status = "fulfilled"
+                    if borrow_req.need_id:
+                        from app.db.models.community import CommunityRequest
+                        need = await db.get(CommunityRequest, borrow_req.need_id)
+                        if need:
+                            need.quantity_fulfilled = (need.quantity_fulfilled or 0) + 1
+                            if need.quantity_fulfilled >= need.quantity:
+                                need.status = "fulfilled"
+                            need.version += 1
 
         await db.flush()
         return loan, is_active
@@ -426,7 +484,10 @@ class LendingService:
             db.add(custody)
 
             # Trust event: determine on-time vs late
-            is_on_time = loan.due_at is None or now <= loan.due_at
+            due = loan.due_at
+            if due is not None and due.tzinfo is None:
+                due = due.replace(tzinfo=timezone.utc)
+            is_on_time = due is None or now <= due
             trust_event = TrustEvent(
                 user_id=loan.borrower_id,
                 loan_id=loan.id,

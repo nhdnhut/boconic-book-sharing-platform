@@ -98,6 +98,11 @@ async def setup():
         else:
             print(f"      -> Tài khoản admin '{admin_user}' đã tồn tại từ trước.")
 
+        if settings.ADMIN_TELEGRAM_ID and settings.ADMIN_TELEGRAM_ID.isdigit():
+            admin.telegram_user_id = int(settings.ADMIN_TELEGRAM_ID)
+            await db.commit()
+            print(f"      -> Đã gắn Telegram numeric ID: {settings.ADMIN_TELEGRAM_ID} (@{settings.ADMIN_USERNAME}) cho admin.")
+
     print("\n==================================================")
     print("          BOCONIC SẴN SÀNG HOẠT ĐỘNG!             ")
     print("==================================================")
