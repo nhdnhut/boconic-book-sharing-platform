@@ -1,7 +1,7 @@
 # BOCONIC — TÀI LIỆU CẬP NHẬT: BOOK REQUESTS, PERSONAL LIBRARY & ADMIN OPERATIONS
 
 **Boconic — Find what you need. Find who can help.**  
-Admin Telegram numeric ID: `5631371609` (@nhutnhd). Xác thực quản trị dựa trên ID số học và session bảo mật, không dựa trên username.
+Admin Telegram numeric ID: Cấu hình qua `ADMIN_TELEGRAM_ID` trong `.env`. Xác thực quản trị dựa trên ID số học và session bảo mật, không dựa trên username.
 
 ---
 

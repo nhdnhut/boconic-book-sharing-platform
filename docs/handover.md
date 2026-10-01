@@ -4,7 +4,7 @@
 **Date:** 01/10/2026  
 **Status:** M0–M10 P0 Complete, Integrated & Fully Verified  
 **Tagline:** *Find what you need. Find who can help.*  
-**Super Admin:** `@nhutnhd` (Telegram ID: `5631371609`, strictly verified by numeric ID)
+**Super Admin:** Configured via `ADMIN_TELEGRAM_ID` and `ADMIN_USERNAME` in `.env` (strictly verified by numeric ID)
 
 ---
 
@@ -113,7 +113,7 @@ python scripts/smoke_test.py
   * Partial Materials Review: `http://localhost:8000/admin/partial-materials`
 
 ### Telegram Bot Verification
-- Super Admin: `@nhutnhd` (Telegram ID: `5631371609`)
+- Super Admin: Configured via `ADMIN_TELEGRAM_ID` in `.env`
 - Interactive Chapter Features:
   * `/chapters`: View book chapters, inspect chapter details, toggle reading status (`not_started`, `in_progress`, `completed`).
   * "Tôi cần chương này": Directly creates a chapter-targeted Community Request.

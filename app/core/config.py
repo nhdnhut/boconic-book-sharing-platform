@@ -25,7 +25,7 @@ class Settings(BaseSettings):
     # Telegram Bot
     BOT_TOKEN: str = ""
     BOT_USERNAME: str = ""
-    ADMIN_USERNAME: str = "nhutnhd"
+    ADMIN_USERNAME: str = "admin"
     ADMIN_TELEGRAM_ID: str = ""
 
     # Security

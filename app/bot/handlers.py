@@ -56,7 +56,13 @@ def parse_http_error(e: Exception) -> str:
         try:
             err_data = e.response.json()
             if isinstance(err_data, dict):
-                return err_data.get("message") or err_data.get("detail") or str(e)
+                if "error" in err_data and isinstance(err_data["error"], dict):
+                    err_data = err_data["error"]
+                msg = err_data.get("message") or err_data.get("detail")
+                if isinstance(msg, list):
+                    return "; ".join([str(m.get("msg", m)) if isinstance(m, dict) else str(m) for m in msg])
+                if msg:
+                    return str(msg)
         except Exception:
             pass
     return str(e)
@@ -221,7 +227,7 @@ async def process_search_query(message: Message, state: FSMContext):
     if not items:
         await message.answer(
             f"Không tìm thấy đầu sách nào khớp với '{query}'.\n\n"
-            "💡 Bạn có thể đăng nhu cầu tìm sách qua mục '📢 Tôi đang cần' để cộng đồng hỗ trợ!",
+            "💡 Bạn có thể đăng nhu cầu tìm sách qua mục '📢 Yêu cầu sách' để cộng đồng hỗ trợ!",
             reply_markup=kb_menu
         )
         return
@@ -530,43 +536,8 @@ async def handle_my_lendings(message: Message):
 
 # --- Community Need Flow ---
 @router.message(F.text == "📢 Tôi đang cần")
-@router.message(Command("need"))
 async def handle_need(message: Message, state: FSMContext):
-    await state.set_state(NeedState.waiting_for_title)
-    await message.answer(
-        "📢 **Đăng nhu cầu tìm sách:**\n\n"
-        "Hãy nhập tên cuốn sách hoặc môn học bạn đang cần mượn gấp:",
-        reply_markup=get_cancel_keyboard(),
-        parse_mode="Markdown"
-    )
-
-@router.message(NeedState.waiting_for_title)
-async def process_need_title(message: Message, state: FSMContext):
-    if not message.text:
-        await message.answer("❌ Vui lòng nhập tên sách bạn cần bằng tin nhắn văn bản:")
-        return
-    title = message.text.strip()
-    if title == "❌ Hủy thao tác":
-        await state.clear()
-        await message.answer("Đã hủy đăng nhu cầu.", reply_markup=get_main_menu_keyboard(is_admin=is_admin(message.from_user.id)))
-        return
-
-    await state.clear()
-    kb_menu = get_main_menu_keyboard(is_admin=is_admin(message.from_user.id))
-    try:
-        res = await internal_bot_client.create_community_need(
-            telegram_user_id=message.from_user.id,
-            title_query=title,
-        )
-        await message.answer(
-            f"✅ **Đã ghi nhận nhu cầu của bạn:** *{title}*\n\n"
-            "Nhu cầu của bạn đã được đưa lên hệ thống mở. "
-            "Khi có thành viên trong khu vực đăng bản sách phù hợp, hệ thống sẽ gửi thông báo đến bạn!",
-            reply_markup=kb_menu,
-            parse_mode="Markdown"
-        )
-    except Exception as e:
-        await message.answer(f"Lỗi ghi nhận nhu cầu: {parse_http_error(e)}", reply_markup=kb_menu)
+    await handle_start_need_wizard(message, state)
 
 # --- Nearby Books Flow ---
 @router.message(F.text == "📍 Gần tôi")
@@ -1181,6 +1152,11 @@ async def handle_need_title_input(message: Message, state: FSMContext):
         await message.answer("❌ Vui lòng nhập tên sách bằng tin nhắn văn bản:")
         return
     title_query = message.text.strip()
+    if title_query == "❌ Hủy thao tác":
+        await state.clear()
+        await message.answer("❌ Đã hủy đăng nhu cầu sách.", reply_markup=get_main_menu_keyboard(is_admin=is_admin(message.from_user.id)))
+        return
+
     if len(title_query) < 2:
         await message.answer("⚠️ Tiêu đề quá ngắn. Vui lòng nhập rõ hơn tên sách bạn cần:")
         return
@@ -1188,8 +1164,9 @@ async def handle_need_title_input(message: Message, state: FSMContext):
     await state.update_data(title_query=title_query)
     await state.set_state(RequestWizardState.waiting_for_scope)
 
+    safe_title = title_query.replace("*", "").replace("_", " ").replace("`", "")
     text = (
-        f"📖 Sách bạn cần: **{title_query}**\n\n"
+        f"📖 Sách bạn cần: **{safe_title}**\n\n"
         "Bạn cần phạm vi tài liệu nào?"
     )
     await message.answer(text, reply_markup=get_need_scope_keyboard(), parse_mode="Markdown")
@@ -1201,7 +1178,7 @@ async def handle_need_scope_choice(call: CallbackQuery, state: FSMContext):
     await state.update_data(scope_type=scope_type)
 
     if scope_type == "full_book":
-        await state.update_data(page_range=[])
+        await state.update_data(page_range=[], target_chapters=[])
         await state.set_state(RequestWizardState.waiting_for_urgency)
         await call.message.edit_text(
             "⏳ **Mức độ cần gấp:**",
@@ -1229,10 +1206,16 @@ async def handle_need_scope_detail_input(message: Message, state: FSMContext):
         await message.answer("❌ Vui lòng nhập chi tiết bằng tin nhắn văn bản:")
         return
     detail_text = message.text.strip()
+    if detail_text == "❌ Hủy thao tác":
+        await state.clear()
+        await message.answer("❌ Đã hủy đăng nhu cầu sách.", reply_markup=get_main_menu_keyboard(is_admin=is_admin(message.from_user.id)))
+        return
+
     data = await state.get_data()
     scope_type = data.get("scope_type", "full_book")
 
     page_range = []
+    target_chapters = []
     if scope_type == "page_range":
         import re
         nums = [int(n) for n in re.findall(r"\d+", detail_text)]
@@ -1240,8 +1223,15 @@ async def handle_need_scope_detail_input(message: Message, state: FSMContext):
             page_range = [min(nums[0], nums[1]), max(nums[0], nums[1])]
         elif len(nums) == 1:
             page_range = [1, nums[0]]
+    elif scope_type == "chapters":
+        import re
+        nums = re.findall(r"\d+", detail_text)
+        if nums:
+            target_chapters = [str(n) for n in nums]
+        else:
+            target_chapters = [c.strip() for c in re.split(r"[,;&]+", detail_text) if c.strip()]
 
-    await state.update_data(scope_detail=detail_text, page_range=page_range)
+    await state.update_data(scope_detail=detail_text, page_range=page_range, target_chapters=target_chapters)
     await state.set_state(RequestWizardState.waiting_for_urgency)
 
     await message.answer(
@@ -1271,23 +1261,46 @@ async def handle_need_location_and_submit(message: Message, state: FSMContext):
         await message.answer("❌ Vui lòng nhập khu vực hoặc gõ `Bỏ qua`:", parse_mode="Markdown")
         return
     loc_text = message.text.strip()
+    if loc_text == "❌ Hủy thao tác":
+        await state.clear()
+        await message.answer("❌ Đã hủy đăng nhu cầu sách.", reply_markup=get_main_menu_keyboard(is_admin=is_admin(message.from_user.id)))
+        return
+
     coarse_location = None if loc_text.lower() in ("bỏ qua", "skip", "none", "") else loc_text
 
     data = await state.get_data()
     actor_id = message.from_user.id
+    raw_title = data.get("title_query", "").strip()
+
+    # Detect ISBN if user entered 10 or 13 digits (with optional dashes/spaces)
+    import re
+    clean_digits = re.sub(r"[\s-]", "", raw_title)
+    isbn = clean_digits if (clean_digits.isdigit() and len(clean_digits) in (10, 13)) else None
+
+    scope_type = data.get("scope_type", "full_book")
+    page_range = data.get("page_range", [])
+    target_chapters = data.get("target_chapters", [])
+    scope_detail = data.get("scope_detail")
 
     try:
         res = await internal_bot_client.create_need(
             telegram_user_id=actor_id,
-            title_query=data["title_query"],
-            scope_type=data.get("scope_type", "full_book"),
-            page_range=data.get("page_range", []),
+            title_query=raw_title,
+            isbn=isbn,
+            scope_type=scope_type,
+            page_range=page_range,
+            target_chapters=target_chapters,
             urgency=data.get("urgency", "normal"),
             coarse_location=coarse_location,
+            description=scope_detail,
         )
     except Exception as e:
+        err_msg = parse_http_error(e)
+        dup_hint = ""
+        if "đã có một yêu cầu đang mở" in err_msg.lower() or "already_exists" in err_msg.lower():
+            dup_hint = "\n\n💡 Bạn có thể kiểm tra danh sách nhu cầu hiện tại bằng nút **📋 Nhu cầu của tôi**."
         await message.answer(
-            f"⚠️ Lỗi khi tạo nhu cầu sách: {parse_http_error(e)}",
+            f"⚠️ Lỗi khi tạo nhu cầu sách: {err_msg}{dup_hint}",
             reply_markup=get_main_menu_keyboard(is_admin=is_admin(actor_id)),
         )
         await state.clear()
@@ -1296,10 +1309,13 @@ async def handle_need_location_and_submit(message: Message, state: FSMContext):
     await state.clear()
     need_id = res.get("need_id")
 
+    safe_title = raw_title.replace("*", "").replace("_", " ").replace("`", "")
+    safe_scope = str(scope_type).replace("*", "").replace("_", " ")
+
     success_text = (
         "🎉 **ĐĂNG NHU CẦU THÀNH CÔNG!**\n\n"
-        f"📚 Sách cần: **{data['title_query']}**\n"
-        f"Phạm vi: `{data.get('scope_type')}`\n"
+        f"📚 Sách cần: **{safe_title}**\n"
+        f"Phạm vi: `{safe_scope}`\n"
         f"Mã nhu cầu: `{need_id}`\n\n"
         "🔍 Hệ thống đã rà soát mạng lưới cộng đồng Boconic và tự động đưa thông báo "
         "vào hàng đợi gửi đến các chủ sách đủ điều kiện.\n\n"
@@ -1445,8 +1461,15 @@ async def handle_owner_offer_full(call: CallbackQuery):
     # Find owner's available copies
     try:
         copies = await internal_bot_client.get_my_books(actor_id)
-        available = [c for c in copies if c.get("circulation_status") == "available"]
-        copy_id = available[0]["id"] if available else None
+        available = [
+            c for c in copies
+            if c.get("status") == "available" or c.get("circulation_status") == "available"
+        ]
+        copy_id = None
+        if available:
+            copy_id = available[0].get("copy_id") or available[0].get("id")
+        elif copies:
+            copy_id = copies[0].get("copy_id") or copies[0].get("id")
 
         await internal_bot_client.create_offer(
             telegram_user_id=actor_id,
@@ -1467,6 +1490,65 @@ async def handle_owner_offer_full(call: CallbackQuery):
     await call.answer("Đã gửi đề nghị hỗ trợ!", show_alert=True)
 
 
+@router.callback_query(F.data.startswith("off_p:"))
+async def handle_owner_offer_partial(call: CallbackQuery):
+    actor_id = call.from_user.id
+    need_id = call.data.split(":", 1)[1]
+    try:
+        copies = await internal_bot_client.get_my_books(actor_id)
+        copy_id = copies[0].get("copy_id") or copies[0].get("id") if copies else None
+        await internal_bot_client.create_offer(
+            telegram_user_id=actor_id,
+            need_id=need_id,
+            offer_type="partial_physical_copy",
+            copy_id=copy_id,
+            proposed_duration_days=14,
+            message="Tôi có bản tài liệu một phần / photocopy sẵn sàng hỗ trợ!",
+        )
+    except Exception as e:
+        await call.answer(f"Lỗi gửi đề nghị: {parse_http_error(e)}", show_alert=True)
+        return
+
+    await call.message.edit_text(
+        "✅ **Cảm ơn bạn!** Đề nghị hỗ trợ tài liệu một phần của bạn đã được chuyển tới người cần sách.",
+        parse_mode="Markdown",
+    )
+    await call.answer("Đã gửi đề nghị hỗ trợ!", show_alert=True)
+
+
+@router.callback_query(F.data.startswith("off_u:"))
+async def handle_owner_offer_upcoming(call: CallbackQuery):
+    actor_id = call.from_user.id
+    need_id = call.data.split(":", 1)[1]
+    try:
+        await internal_bot_client.create_offer(
+            telegram_user_id=actor_id,
+            need_id=need_id,
+            offer_type="available_later",
+            proposed_duration_days=14,
+            message="Sách hiện đang cho mượn nhưng sắp có lại.",
+        )
+    except Exception as e:
+        await call.answer(f"Lỗi gửi đề nghị: {parse_http_error(e)}", show_alert=True)
+        return
+
+    await call.message.edit_text(
+        "⏳ **Đã ghi nhận!** Hệ thống sẽ gửi thông tin tới người cần rằng sách sắp sẵn sàng.",
+        parse_mode="Markdown",
+    )
+    await call.answer("Đã ghi nhận sách sắp có lại!", show_alert=True)
+
+
+@router.callback_query(F.data.startswith("off_r:"))
+async def handle_owner_offer_referral(call: CallbackQuery):
+    await call.message.edit_text(
+        "💡 **Cảm ơn bạn!** Gợi ý nguồn học liệu của bạn đã được ghi nhận vào hệ thống.",
+        parse_mode="Markdown",
+    )
+    await call.answer("Đã ghi nhận gợi ý nguồn!", show_alert=True)
+
+
+@router.callback_query(F.data.startswith("off_d:"))
 @router.callback_query(F.data.startswith("off_n:"))
 async def handle_owner_offer_decline(call: CallbackQuery):
     await call.message.edit_text(
@@ -1476,6 +1558,7 @@ async def handle_owner_offer_decline(call: CallbackQuery):
     await call.answer()
 
 
+@router.callback_query(F.data == "off_mute")
 @router.callback_query(F.data.startswith("off_m:"))
 async def handle_owner_offer_mute(call: CallbackQuery):
     await call.message.edit_text(
@@ -1715,6 +1798,45 @@ async def handle_callback_set_chapter_status(call: CallbackQuery):
         pass
 
 
+@router.callback_query(F.data.startswith("req_ch:"))
+async def handle_callback_request_chapter_menu(call: CallbackQuery, state: FSMContext):
+    actor_id = call.from_user.id
+    book_id = call.data.split(":", 1)[1]
+    try:
+        data = await internal_bot_client.get_book_chapters_and_progress(actor_id, book_id)
+        book_title = data.get("book_title", "Sách")
+        chapters = data.get("chapters", [])
+    except Exception as e:
+        await call.answer(f"Lỗi: {parse_http_error(e)}", show_alert=True)
+        return
+
+    if not chapters:
+        await state.clear()
+        await state.set_state(RequestWizardState.waiting_for_scope)
+        await state.update_data(title_query=book_title, book_id=book_id)
+        await call.message.answer(
+            f"📢 **ĐĂNG NHU CẦU CHO SÁCH:** **{book_title}**\n\nBạn cần phạm vi tài liệu nào?",
+            reply_markup=get_need_scope_keyboard(),
+            parse_mode="Markdown",
+        )
+        await call.answer()
+        return
+
+    buttons = []
+    for c in chapters[:8]:
+        cid = c["id"]
+        c_title = c.get("title", f"Chương {c.get('chapter_number', '')}")
+        buttons.append([InlineKeyboardButton(text=f"📢 Cần: {c_title[:24]}", callback_data=f"need_c:{book_id}:{cid}")])
+    buttons.append([InlineKeyboardButton(text="⬅️ Quay lại danh mục chương", callback_data=f"ch_list:{book_id}")])
+
+    await call.message.edit_text(
+        f"📖 **Chọn chương bạn đang cần tìm:**\n📚 Sách: **{book_title}**",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons),
+        parse_mode="Markdown",
+    )
+    await call.answer()
+
+
 @router.callback_query(F.data.startswith("need_c:"))
 async def handle_callback_need_chapter(call: CallbackQuery):
     actor_id = call.from_user.id
@@ -1732,6 +1854,7 @@ async def handle_callback_need_chapter(call: CallbackQuery):
             title_query=title,
             book_id=book_id,
             scope_type="chapters",
+            target_chapters=[chapter_id],
             description=f"Cần tài liệu cho chương: {target.get('title', 'N/A') if target else 'N/A'} (chapter_id: {chapter_id})",
         )
         nid = res.get("need_id", "")
@@ -2987,16 +3110,19 @@ async def handle_borrow_partial_urgency_choice(call: CallbackQuery, state: FSMCo
     title_query = data.get("title_query", "")
     scope_type = data.get("scope_type", "chapters")
     page_range = data.get("page_range", [])
+    target_chapters = data.get("target_chapters", [])
     scope_detail = data.get("scope_detail", "")
 
     try:
         res = await internal_bot_client.create_need(
             telegram_user_id=actor_id,
-            title_query=f"{title_query} ({scope_detail})",
+            title_query=title_query,
             scope_type=scope_type,
             page_range=page_range,
+            target_chapters=target_chapters,
             urgency=urgency,
             coarse_location=None,
+            description=f"Nhu cầu mượn 1 phần: {scope_detail}" if scope_detail else None,
         )
     except Exception as e:
         await state.clear()

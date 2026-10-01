@@ -33,6 +33,8 @@ ENV/
 
 # Environment secrets & local config
 .env
+.env.configured
+.env.local
 *.local.env
 
 # Database & SQLite files
