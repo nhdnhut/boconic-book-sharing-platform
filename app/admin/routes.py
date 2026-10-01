@@ -756,6 +756,8 @@ async def loans_page(
     status: Optional[str] = Query(None),
     overdue: Optional[str] = Query(None),
     q: Optional[str] = Query(None),
+    message: Optional[str] = Query(None),
+    error: Optional[str] = Query(None),
     boconic_session: Optional[str] = Cookie(None),
     db: AsyncSession = Depends(get_db),
 ):
@@ -771,11 +773,11 @@ async def loans_page(
     if status:
         stmt = stmt.where(Loan.status == status)
 
-    now = datetime.datetime.now(datetime.timezone.utc)
+    now_utc = datetime.datetime.now(datetime.timezone.utc)
     if overdue == "yes":
-        stmt = stmt.where(Loan.status == "active", Loan.due_at < now)
+        stmt = stmt.where(Loan.status == "active", Loan.due_at < now_utc)
     elif overdue == "no":
-        stmt = stmt.where(or_(Loan.status != "active", Loan.due_at >= now, Loan.due_at.is_(None)))
+        stmt = stmt.where(or_(Loan.status != "active", Loan.due_at >= now_utc, Loan.due_at.is_(None)))
 
     if q and q.strip():
         kw = f"%{q.strip()}%"
@@ -793,7 +795,14 @@ async def loans_page(
 
     stmt = stmt.order_by(desc(Loan.created_at))
     res = await db.execute(stmt)
-    loans = res.scalars().all()
+    loans = res.scalars().unique().all()
+
+    # Safely calculate overdue status without offset-naive/offset-aware datetime conflict
+    for l in loans:
+        due = l.due_at
+        if due and due.tzinfo is None:
+            due = due.replace(tzinfo=datetime.timezone.utc)
+        l.is_overdue = bool(l.status == "active" and due and due < now_utc)
 
     return templates.TemplateResponse(
         request,
@@ -801,10 +810,12 @@ async def loans_page(
         {
             "admin": admin,
             "loans": loans,
-            "now": now,
+            "now": now_utc,
             "current_status": status,
             "overdue_filter": overdue,
             "search_q": q or "",
+            "message": message,
+            "error": error,
             "active_nav": "loans",
         },
     )
@@ -837,8 +848,11 @@ async def admin_loan_detail(
     if not loan:
         return RedirectResponse(url="/admin/loans", status_code=303)
 
-    now = datetime.datetime.now(datetime.timezone.utc)
-    is_overdue = loan.status == "active" and loan.due_at and loan.due_at < now
+    now_utc = datetime.datetime.now(datetime.timezone.utc)
+    due = loan.due_at
+    if due and due.tzinfo is None:
+        due = due.replace(tzinfo=datetime.timezone.utc)
+    is_overdue = bool(loan.status == "active" and due and due < now_utc)
     confirmations = sorted(loan.confirmations, key=lambda c: c.confirmed_at or datetime.datetime.min)
     events = sorted(loan.events, key=lambda e: e.created_at or datetime.datetime.min, reverse=True)
 

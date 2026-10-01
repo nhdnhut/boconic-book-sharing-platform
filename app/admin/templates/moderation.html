@@ -124,7 +124,7 @@
             <td><code>{{ r.category }}</code></td>
             <td>
               <span class="badge badge-info" style="font-size: 0.75rem;">{{ r.target_entity_type }}</span>
-              <div style="font-size: 0.75rem; color: var(--text-muted);">{{ r.target_entity_id[:8] }}...</div>
+              <div style="font-size: 0.75rem; color: var(--text-muted);">{{ (r.target_entity_id or '')[:8] }}...</div>
             </td>
             <td style="max-width: 280px;">
               <div style="font-size: 0.85rem;">{{ r.description }}</div>
