@@ -75,7 +75,7 @@ async def login_submit(
         expires_at=expires_at,
     )
     db.add(session)
-    await db.flush()
+    await db.commit()
 
     response = RedirectResponse(url="/admin/dashboard", status_code=303)
     response.set_cookie(
@@ -216,6 +216,7 @@ async def admin_create_book_form(
         entity_id=book.id,
         actor_id=admin.id,
     )
+    await db.commit()
     return RedirectResponse(url="/admin/books", status_code=303)
 
 @router.get("/copies", response_class=HTMLResponse)
@@ -322,7 +323,7 @@ async def custom_fields_submit(
         options=options,
     )
     db.add(field_def)
-    await db.flush()
+    await db.commit()
 
     return RedirectResponse(url="/admin/custom-fields", status_code=303)
 
@@ -398,6 +399,7 @@ async def import_upload(
 
     # Execute directly for P0 demo
     await ImportExportService.execute_book_import(db, job.id, rows, mapping, mode=mode)
+    await db.commit()
 
     res = await db.execute(select(ImportJob).order_by(desc(ImportJob.created_at)).limit(10))
     history = res.scalars().all()
@@ -474,4 +476,21 @@ async def create_backup_submit(
         return RedirectResponse(url="/admin/login", status_code=303)
 
     await BackupService.create_backup(db, created_by=admin.id)
+    await db.commit()
     return RedirectResponse(url="/admin/backups", status_code=303)
+
+@router.get("/logout", response_class=HTMLResponse)
+@router.post("/logout", response_class=HTMLResponse)
+async def admin_logout(
+    boconic_session: Optional[str] = Cookie(None),
+    db: AsyncSession = Depends(get_db),
+):
+    if boconic_session:
+        res = await db.execute(select(AdminSession).where(AdminSession.session_token == boconic_session))
+        sess = res.scalar_one_or_none()
+        if sess:
+            await db.delete(sess)
+            await db.commit()
+    response = RedirectResponse(url="/admin/login", status_code=303)
+    response.delete_cookie(key=settings.SESSION_COOKIE_NAME)
+    return response
