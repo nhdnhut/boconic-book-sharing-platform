@@ -1,4 +1,4 @@
-# Boconic - Community Book Circulation and Lending Platform
+﻿# Boconic - Community Book Circulation and Lending Platform
 
 > Find what you need. Find who can help.
 > Version: 2.0.0 | Environment: Python 3.12+ | Production-Ready
@@ -103,7 +103,7 @@ The lending lifecycle enforces mathematical consistency through an explicit fini
 ### Linux / macOS Setup
 ```bash
 # Clone the repository
-git clone https://github.com/nhutnhd/boconic-book-sharing-platform.git
+git clone https://github.com/nhdnhut/boconic-book-sharing-platform.git
 cd boconic-book-sharing-platform
 
 # Make startup script executable and run
@@ -159,23 +159,23 @@ Test Results Summary:
 
 ```
 boconic-book-sharing-platform/
-├── app/
-│   ├── main.py                 # FastAPI application factory and routing
-│   ├── config.py               # Pydantic Settings configuration loader
-│   ├── database.py             # SQLAlchemy 2.0 async engine and session factory
-│   ├── admin/                  # Web administration routes and templates
-│   ├── api/                    # REST API endpoints (v1)
-│   ├── bot/                    # Telegram bot handlers and keyboards
-│   ├── models/                 # SQLAlchemy ORM declarative models
-│   ├── schemas/                # Pydantic request and response schemas
-│   └── services/               # Business logic, state machines, and matching
-├── migrations/                 # Alembic database migrations
-├── tests/                      # Pytest test cases and fixtures
-├── compose.yaml                # Docker Compose production configuration
-├── Dockerfile                  # Container build specification
-├── alembic.ini                 # Alembic configuration
-├── pyproject.toml              # Build and dependency configuration
-└── README.md                   # Project documentation
+â”œâ”€â”€ app/
+â”‚   â”œâ”€â”€ main.py                 # FastAPI application factory and routing
+â”‚   â”œâ”€â”€ config.py               # Pydantic Settings configuration loader
+â”‚   â”œâ”€â”€ database.py             # SQLAlchemy 2.0 async engine and session factory
+â”‚   â”œâ”€â”€ admin/                  # Web administration routes and templates
+â”‚   â”œâ”€â”€ api/                    # REST API endpoints (v1)
+â”‚   â”œâ”€â”€ bot/                    # Telegram bot handlers and keyboards
+â”‚   â”œâ”€â”€ models/                 # SQLAlchemy ORM declarative models
+â”‚   â”œâ”€â”€ schemas/                # Pydantic request and response schemas
+â”‚   â””â”€â”€ services/               # Business logic, state machines, and matching
+â”œâ”€â”€ migrations/                 # Alembic database migrations
+â”œâ”€â”€ tests/                      # Pytest test cases and fixtures
+â”œâ”€â”€ compose.yaml                # Docker Compose production configuration
+â”œâ”€â”€ Dockerfile                  # Container build specification
+â”œâ”€â”€ alembic.ini                 # Alembic configuration
+â”œâ”€â”€ pyproject.toml              # Build and dependency configuration
+â””â”€â”€ README.md                   # Project documentation
 ```
 
 ---
@@ -184,4 +184,5 @@ boconic-book-sharing-platform/
 
 This project is licensed under the MIT License. See the [LICENSE](LICENSE) file for full details.
 
-Developed and maintained by Nhut Nguyen (@nhutnhd).
+Developed and maintained by Nhut Nguyen (@nhdnhut).
+
