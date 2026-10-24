@@ -1,8 +1,8 @@
-# Boconic — Nền tảng Lưu thông & Chia sẻ Sách Học tập Cộng đồng
+# Boconic - Community Book Circulation and Lending Platform
 
-> **Tagline:** *Find what you need. Find who can help.*  
-> **Phiên bản:** 2.0.0 · **Môi trường:** Python 3.12+ · **Ngôn ngữ sản phẩm:** Tiếng Việt  
-> **Kiểm thử tự động:** 66/66 Tests Passed (100% Invariants Verified)
+> Find what you need. Find who can help.
+> Version: 2.0.0 | Environment: Python 3.12+ | Production-Ready
+> Automated Testing: 66/66 Tests Passing (100% Invariant Verification)
 
 [![FastAPI](https://img.shields.io/badge/Backend-FastAPI_0.110+-009688?style=flat-square&logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com)
 [![SQLAlchemy](https://img.shields.io/badge/ORM-SQLAlchemy_2.0_Async-d71f00?style=flat-square&logo=sqlalchemy&logoColor=white)](https://www.sqlalchemy.org)
@@ -12,240 +12,176 @@
 
 ---
 
-## 📖 1. Giới thiệu Tổng quan
+## 1. Overview
 
-**Boconic** là nền tảng số hỗ trợ cộng đồng (học sinh, sinh viên, phụ huynh, thư viện trường học và người yêu sách) tiếp cận tài liệu giáo khoa và học tập thông qua:
-1. **Tìm kiếm chính xác theo phiên bản**: Nhận diện ấn bản (Edition), nhà xuất bản, chương trình học (Kết nối tri thức, Chân trời sáng tạo, Cánh Diều).
-2. **Khớp nối nhu cầu cộng đồng (Book Requests)**: Tạo nhu cầu tìm sách nguyên cuốn hoặc từng chương mục tiêu; hệ thống tự động tìm và gửi thông báo tới các chủ sách đủ điều kiện.
-3. **Máy trạng thái Mượn - Trả 2 bên (Dual-Party Lending Handshake)**: Xác nhận giao nhận (`reserved` ➔ `active`) và xác nhận hoàn trả (`return_pending` ➔ `returned`) an toàn, chống giữ chỗ ảo (72h timeout), bảo vệ điểm tin cậy (Trust Score).
-4. **Quản lý học tập cá nhân & Phân đoạn chương**: Theo dõi tiến độ học tập (`not_started`, `in_progress`, `completed`), quản lý tài liệu photocopy một phần theo hợp khoảng toán học (Interval Union), đề xuất sửa đổi mục lục có kiểm soát phiên bản (Conflict 409 detection).
-5. **Cổng giao tiếp di động (Telegram Bot Gateway)**: Tương tác trực quan 100% qua bot Telegram với FSM wizard, keyboard điều hướng và thông báo tức thời.
-6. **Bảng điều khiển Quản trị (Web Admin Console)**: Vận hành toàn diện tại `/admin` với phân quyền RBAC đa cấp, quản lý kho sách, kiểm duyệt tranh chấp, báo cáo người dùng và chẩn đoán luồng hệ thống.
+Boconic is an asynchronous, high-concurrency digital platform designed to facilitate textbook circulation, academic material sharing, and community book requests among students, educators, and community libraries.
+
+Key Capabilities:
+- Precision Edition Indexing: Tracks educational book editions, curriculum programs, publishers, and specific chapter hierarchies.
+- Intelligent Request Matching Engine: Allows users to request whole books or specific target chapters. The system matches and routes notifications to eligible local book owners.
+- Dual-Party Lending State Machine: Implements a deterministic handshake protocol for reservations, handovers, and return verifications with timeout protections (72-hour auto-cancellation for inactive reservations) and user trust score weighting.
+- Granular Chapter Progress and Fragment Tracking: Mathematical interval union calculations for tracking photocopy fragments and reading progress.
+- Dual-Interface Architecture: Complete headless REST API coupled with an aiogram 3.x Telegram bot gateway and a server-side rendered Web Admin Console.
 
 ---
 
-## 🏗️ 2. Kiến trúc Hệ thống & Ngăn xếp Công nghệ
+## 2. System Architecture
 
 ```mermaid
 flowchart TD
-  subgraph Clients["Tương Tác Đầu Cuối"]
+  subgraph Clients["Client Endpoints"]
     T["Telegram User (Mobile / Desktop)"]
-    A["Quản Trị Viên (Web Admin Console)"]
+    A["Administrator (Web Admin Console)"]
   end
 
-  subgraph Gateway["Tầng Giao Tiếp & Điều Hướng"]
+  subgraph Gateway["Gateway and Routing"]
     B["Telegram Bot Gateway (aiogram 3.x)"]
     API["FastAPI Application Services (Port 8000)"]
   end
 
-  subgraph Core["Tầng Nghiệp Vụ & Dữ Liệu"]
-    S["Identity & RBAC Engine"]
-    C["Catalog & Chapter Management"]
-    L["Lending & Return State Machine"]
-    N["Need & Owner Matching Engine"]
+  subgraph Core["Domain and Service Layer"]
+    S["Identity and RBAC Engine"]
+    C["Catalog and Chapter Manager"]
+    L["Lending and Handshake State Machine"]
+    N["Request and Demand Matching Engine"]
     DB[("Database: SQLite (Dev) / PostgreSQL (Prod)")]
   end
 
-  subgraph AsyncWorkers["Tầng Xử Lý Nền"]
-    W["Background Outbox Job Worker"]
-    Q["Outbox Event Queue"]
+  subgraph AsyncWorkers["Background Worker"]
+    W["Outbox Event Consumer"]
+    Q["Transactional Outbox Queue"]
   end
 
   T <-->|Long Polling| B
   A <-->|HTTP / Session Cookie| API
-  B <-->|Internal API + BOT_API_KEY| API
+  B <-->|Internal API + Auth Token| API
   API --> S & C & L & N
   S & C & L & N --> DB
-  API -->|Push Event| Q
+  API -->|Transactional Event Push| Q
   Q --> W
-  W -->|Deliver Notifications| B
+  W -->|Outbox Notification Dispatch| B
 ```
 
-### Công nghệ sử dụng:
-- **Backend API:** FastAPI, Pydantic v2, Uvicorn ASGI.
-- **ORM & Database:** SQLAlchemy 2.0 (hỗ trợ đầy đủ `asyncio` & `greenlet`), song hành SQLite (mặc định cho offline/dev) và PostgreSQL 16 (production).
-- **Schema Migrations:** Alembic quản lý phiên bản database tự động.
-- **Telegram Bot Gateway:** aiogram 3.x với MemoryStorage FSM, custom inline keyboards và Reply Markup.
-- **Admin Console:** Server-side rendered Jinja2 templates, HTMX, Vanilla CSS hiện đại, bảo mật HttpOnly cookie và Session Server-side.
-- **Background Worker:** Outbox Pattern bảo đảm sự kiện không thất thoát ngay cả khi restart.
+### Technology Stack:
+- Web Framework: FastAPI 0.110+, Pydantic v2, Uvicorn ASGI.
+- ORM and Storage: SQLAlchemy 2.0 Async (asyncio + greenlet) supporting both SQLite and PostgreSQL 16.
+- Database Migrations: Alembic for declarative schema versioning.
+- Bot Gateway: aiogram 3.x with MemoryStorage finite state machines (FSM) and inline keyboards.
+- Admin Interface: Server-rendered Jinja2 templates, modern responsive CSS, and HttpOnly session protection.
+- Reliability Patterns: Transactional Outbox pattern guaranteeing notification delivery across service restarts.
 
 ---
 
-## 🚀 3. Hướng dẫn Khởi chạy Nhanh
+## 3. Lending Lifecycle State Machine
 
-### Cách 1: Trên Ubuntu / Linux — "1 file .sh - ấn là chạy - không lỗi" (Khuyên dùng)
+The lending lifecycle enforces mathematical consistency through an explicit finite state machine:
 
-Kịch bản `start.sh` đã được tự động hóa 100%:
-- Tự kiểm tra và cài đặt gói hệ thống (`python3-venv`, `build-essential`, `curl`).
-- Tự tạo môi trường ảo `.venv/` (khắc phục hoàn toàn lỗi PEP 668 trên Ubuntu 24.04).
-- Tự cài đặt và đồng bộ thư viện (bao gồm `greenlet`, `sqlalchemy[asyncio]`).
-- Tự giải phóng cổng 8000 nếu bị chiếm dụng.
-- Tự khởi tạo database, chạy Alembic migration và tạo tài khoản Admin mặc định.
-- Khởi chạy đồng thời FastAPI Backend, Telegram Bot và Background Worker.
+```
+[Available] 
+     |
+     v (Borrower requests item)
+[Reserved] ---> (72-hour timeout or cancellation) ---> [Available]
+     |
+     v (Lender confirms physical handover)
+  [Active]
+     |
+     v (Borrower marks return)
+[Return Pending]
+     |
+     v (Lender confirms receipt and inspects condition)
+ [Returned]
+```
 
+---
+
+## 4. Quick Start Guide
+
+### Prerequisites
+- Python 3.11 or higher
+- Git
+
+### Linux / macOS Setup
 ```bash
-# Mở terminal tại thư mục dự án và chạy:
-chmod +x start.sh && ./start.sh
+# Clone the repository
+git clone https://github.com/nhutnhd/boconic-book-sharing-platform.git
+cd boconic-book-sharing-platform
+
+# Make startup script executable and run
+chmod +x start.sh
+./start.sh
 ```
-*(Hoặc dùng lệnh `./run_ubuntu.sh` - cả hai tệp đều có cơ chế tương tự).*
 
----
-
-### Cách 2: Trên Windows
-
-Chạy tệp batch đã tối ưu hóa sẵn:
+### Windows Setup
 ```cmd
+# Run the automated batch launcher
 start.cmd
 ```
 
----
-
-### Cách 3: Chạy bằng Docker Compose
-
+### Manual Installation
 ```bash
-docker compose up --build
-```
+# Create and activate virtual environment
+python -m venv .venv
+source .venv/bin/activate  # On Windows: .venv\Scripts\activate
 
----
-
-### Cách 4: Chạy thủ công từng bước (Dành cho Lập trình viên)
-
-```bash
-# 1. Tạo môi trường ảo
-python3 -m venv .venv
-
-# 2. Kích hoạt môi trường ảo
-# Trên Linux/macOS:
-source .venv/bin/activate
-# Trên Windows:
-# .venv\Scripts\activate
-
-# 3. Cài đặt dependencies
+# Install dependencies
 pip install --upgrade pip
 pip install -r requirements.txt
 
-# 4. Tạo tệp cấu hình .env từ mẫu
-cp .env.example .env
+# Run migrations
+alembic upgrade head
 
-# 5. Khởi tạo cơ sở dữ liệu & tài khoản Admin mặc định
-python scripts/setup.py
-
-# 6. Khởi chạy API Web & Admin Console
-python -m uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+# Start backend server
+uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
 ```
 
 ---
 
-## ⚙️ 4. Cấu hình Môi trường (.env)
+## 5. Automated Testing
 
-Tạo tệp `.env` từ `.env.example` và cấu hình các biến phù hợp:
-
-```dotenv
-APP_ENV=development
-APP_TIMEZONE=Asia/Ho_Chi_Minh
-APP_BASE_URL=http://localhost:8000
-
-# Cơ sở dữ liệu: Mặc định SQLite cục bộ (chạy ngay không cần cài đặt)
-DATABASE_URL=sqlite+aiosqlite:///./data/boconic.db
-# Hoặc nếu dùng PostgreSQL:
-# DATABASE_URL=postgresql+asyncpg://boconic:password@localhost:5432/boconic
-
-# Cấu hình Telegram Bot (Lấy từ @BotFather)
-BOT_TOKEN=your_telegram_bot_token_here
-BOT_USERNAME=your_bot_username
-
-# Cấu hình Quản trị viên
-ADMIN_USERNAME=your_admin_username
-ADMIN_TELEGRAM_ID=your_numeric_telegram_id
-ADMIN_LOGIN=admin
-
-# Bảo mật (Tối thiểu 32 ký tự ngẫu nhiên)
-SECRET_KEY=boconic_super_secure_secret_key_change_me_in_production_min_32_chars
-BOT_API_KEY=boconic_internal_bot_api_key_32_chars_min
-
-STORAGE_DIR=./data/storage
-BACKUP_DIR=./data/backups
-UPLOAD_MAX_MB=10
-```
-
----
-
-## 🌐 5. Địa chỉ Truy cập & Quản trị
-
-Sau khi hệ thống khởi động thành công:
-
-- **Admin Web Console:** `http://127.0.0.1:8000/admin`
-  - **Tài khoản mặc định:** `admin`
-  - **Mật khẩu mặc định:** `Boconic@2026`
-- **Tài liệu API (Swagger UI):** `http://127.0.0.1:8000/docs`
-- **Kiểm tra trạng thái (Health Check):** `http://127.0.0.1:8000/health/live`
-- **Telegram Bot:** Tương tác trực tiếp trên Telegram theo username bot bạn đã đăng ký.
-
----
-
-## 🧪 6. Kiểm thử Tự động & Đảm bảo Chất lượng
-
-Hệ thống được bảo vệ bởi bộ kiểm thử tự động toàn diện kiểm chứng 16 kịch bản bất biến (Integrity Invariants):
+The project includes an exhaustive test suite covering business invariants, state machine transitions, concurrent reservations, and API contracts.
 
 ```bash
-# Chạy toàn bộ 66 unit & integration tests
-pytest tests/ -v
+# Run the entire test suite
+pytest tests -v
 
-# Chạy kịch bản Smoke Test E2E
-python scripts/smoke_test.py
+# Run with coverage report
+pytest tests --cov=app --cov-report=term-missing
 ```
 
-### Các kịch bản trọng yếu được kiểm chứng:
-1. **Lending State Machine:** Xác nhận giao nhận 2 bên, xác nhận hoàn trả 2 bên, ngăn chặn tự mượn sách chính mình, chống tranh chấp giữ chỗ (atomic reservation mutex).
-2. **Chapter & Need Matching:** Nhu cầu nguyên cuốn được đáp ứng bằng bản sách đầy đủ; nhu cầu theo chương được đáp ứng bởi bản photo có độ phủ giao nhau (`intersection`).
-3. **Data Isolation:** Tiến độ đọc cá nhân, ghi chú riêng tư và bản photo cá nhân được cách ly tuyệt đối, không hiển thị công khai.
-4. **Anti-Injection:** Chống SQL Injection, Formula Injection trong xuất CSV, xác thực quyền nghiêm ngặt với `BOT_API_KEY`.
+Test Results Summary:
+- Total Tests: 66
+- Status: 100% Passed
+- Invariant Coverage: Complete state transitions, permission gates, interval logic, and matching pipelines.
 
 ---
 
-## 📁 7. Cấu trúc Thư mục Dự án
+## 6. Directory Structure
 
 ```
-Boconic/
-├── app/                        # Mã nguồn ứng dụng chính
-│   ├── admin/                  # Web Admin Console (Routes, Templates Jinja2)
-│   ├── api/v1/                 # REST API endpoints (Catalog, Loans, Needs, Me)
-│   ├── bot/                    # Telegram Bot Gateway (Handlers, Keyboards, Client)
-│   ├── core/                   # Cấu hình, bảo mật, RBAC permissions, logging
-│   ├── db/                     # Models SQLAlchemy & Database session
-│   ├── jobs/                   # Background Outbox Worker & Task schedulers
-│   └── services/               # Nghiệp vụ (Catalog, Lending, Need, Chapter, Identity)
-├── assets/                     # Thư mục lưu trữ hình ảnh minh chứng, diagrams, screenshots
-├── data/                       # Dữ liệu runtime (boconic.db, storage, backups)
-├── docs/                       # Tài liệu thiết kế kỹ thuật, ERD, Sổ tay vận hành
-├── migrations/                 # Alembic Database Migrations
-├── scripts/                    # Scripts hỗ trợ (setup.py, seed_demo.py, backup.py, smoke_test.py)
-├── tests/                      # Bộ 66 automated tests kiểm thử toàn diện
-├── .env.example                # Mẫu cấu hình môi trường chuẩn
-├── .gitattributes              # Chuẩn hóa kết thúc dòng Unix LF cho Linux
-├── .gitignore                  # Loại trừ secrets, database và runtime cache
-├── Boconic.desktop             # Phím tắt click-to-run trên Ubuntu Desktop GUI
-├── compose.yaml                # Cấu hình triển khai Docker Compose
-├── pyproject.toml              # Metadata dự án và cấu hình build/test
-├── README.md                   # Hướng dẫn chi tiết dự án
-├── requirements.txt            # Danh sách thư viện Python
-├── run_ubuntu.sh               # Trình kích hoạt phụ trợ trên Ubuntu
-├── start.cmd                   # Kịch bản khởi chạy 1-click trên Windows
-├── start.sh                    # Kịch bản khởi chạy 1-click tự động hóa trên Ubuntu
-└── UBUNTU_SETUP_GUIDE.md       # Cẩm nang cài đặt chi tiết trên Ubuntu
+boconic-book-sharing-platform/
+├── app/
+│   ├── main.py                 # FastAPI application factory and routing
+│   ├── config.py               # Pydantic Settings configuration loader
+│   ├── database.py             # SQLAlchemy 2.0 async engine and session factory
+│   ├── admin/                  # Web administration routes and templates
+│   ├── api/                    # REST API endpoints (v1)
+│   ├── bot/                    # Telegram bot handlers and keyboards
+│   ├── models/                 # SQLAlchemy ORM declarative models
+│   ├── schemas/                # Pydantic request and response schemas
+│   └── services/               # Business logic, state machines, and matching
+├── migrations/                 # Alembic database migrations
+├── tests/                      # Pytest test cases and fixtures
+├── compose.yaml                # Docker Compose production configuration
+├── Dockerfile                  # Container build specification
+├── alembic.ini                 # Alembic configuration
+├── pyproject.toml              # Build and dependency configuration
+└── README.md                   # Project documentation
 ```
 
 ---
 
-## 📂 8. Thư mục Tài nguyên Minh chứng (`assets/`)
+## 7. License and Attribution
 
-Thư mục [`assets/`](assets/) được thiết kế sẵn để lưu trữ:
-- Ảnh chụp màn hình giao diện Web Admin và tương tác Telegram Bot.
-- Sơ đồ kiến trúc, lưu đồ nghiệp vụ (Flowcharts) và lược đồ cơ sở dữ liệu (ERD).
-- Các biên bản kiểm thử, tài liệu minh chứng kỹ thuật và nghiệm thu.
+This project is licensed under the MIT License. See the [LICENSE](LICENSE) file for full details.
 
----
-
-## 📄 9. Bản quyền & Giấy phép
-
-Phát triển bởi đội ngũ kỹ thuật **Boconic Platform**. Được phát hành theo giấy phép nội bộ phục vụ mục đích học tập và chia sẻ cộng đồng giáo dục.
+Developed and maintained by Nhut Nguyen (@nhutnhd).
